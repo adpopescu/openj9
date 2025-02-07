@@ -140,6 +140,9 @@ objectMonitorEnterBlocking(J9VMThread *currentThread)
 	UDATA result = 0;
 	j9object_t object = J9VMTHREAD_BLOCKINGENTEROBJECT(currentThread, currentThread);
 	J9Class *ramClass = J9OBJECT_CLAZZ(currentThread, object);
+	J9JavaVM *javaVM = currentThread->javaVM;
+	PORT_ACCESS_FROM_JAVAVM(javaVM);
+	I_64 startTicks = j9time_nano_time();
 	/* Throughout this function, note that inlineGetLockAddress cannot run into out of memory case because
 	 * an entry in monitor table will have been created by the earlier call in objectMonitorEnterNonBlocking.
 	 */
@@ -288,9 +291,10 @@ done:
 		/* Clear the SUPPRESS_CONTENDED_EXITS bit in the monitor saying that CONTENDED EXIT can be sent again */
 		((J9ThreadMonitor*)monitor)->flags &= ~(UDATA)J9THREAD_MONITOR_SUPPRESS_CONTENDED_EXIT;
 		VM_AtomicSupport::subtract(&monitor->pinCount, 1);
+		J9VMThread *ownerThread = getVMThreadFromOMRThread(javaVM, ((J9ThreadMonitor*)monitor)->owner);
 		if (J9_EVENT_IS_HOOKED(vm->hookInterface, J9HOOK_VM_MONITOR_CONTENDED_ENTERED)) {
 			bool frameBuilt = saveBlockingEnterObject(currentThread);
-			ALWAYS_TRIGGER_J9HOOK_VM_MONITOR_CONTENDED_ENTERED(vm->hookInterface, currentThread, monitor);
+			ALWAYS_TRIGGER_J9HOOK_VM_MONITOR_CONTENDED_ENTERED(vm->hookInterface, currentThread, monitor, startTicks, (UDATA) monitor, ramClass, ownerThread);
 			restoreBlockingEnterObject(currentThread, frameBuilt);
 		}
 	}

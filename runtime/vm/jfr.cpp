@@ -72,6 +72,7 @@ static void jfrThreadStarting(J9HookInterface **hook, UDATA eventNum, void *even
 static void jfrThreadEnd(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData);
 static void jfrVMInitialized(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData);
 static void jfrVMMonitorWaited(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData);
+static void jfrVMMonitorEntered(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData);
 static void jfrVMThreadParked(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData);
 static void jfrStartSamplingThread(J9JavaVM *vm);
 static void initializeEventFields(J9VMThread *currentThread, J9JFREvent *jfrEvent, UDATA eventType);
@@ -109,6 +110,9 @@ jfrEventSize(J9JFREvent *jfrEvent)
 		break;
 	case J9JFR_EVENT_TYPE_OBJECT_WAIT:
 		size = sizeof(J9JFRMonitorWaited) + (((J9JFRMonitorWaited*)jfrEvent)->stackTraceSize * sizeof(UDATA));
+		break;
+	case J9JFR_EVENT_TYPE_MONITOR_ENTER:
+		size = sizeof(J9JFRMonitorEntered) + (((J9JFRMonitorEntered*)jfrEvent)->stackTraceSize * sizeof(UDATA));
 		break;
 	case J9JFR_EVENT_TYPE_THREAD_PARK:
 		size = sizeof(J9JFRThreadParked) + (((J9JFRThreadParked*)jfrEvent)->stackTraceSize * sizeof(UDATA));
@@ -668,6 +672,35 @@ jfrVMMonitorWaited(J9HookInterface **hook, UDATA eventNum, void *eventData, void
 }
 
 /**
+ * Hook for VM monitor entered. Called without VM access.
+ *
+ * @param hook[in] the VM hook interface
+ * @param eventNum[in] the event number
+ * @param eventData[in] the event data
+ * @param userData[in] the registered user data
+ */
+static void
+jfrVMMonitorEntered(J9HookInterface **hook, UDATA eventNum, void *eventData, void *userData)
+{
+	J9VMMonitorContendedEnteredEvent *event = (J9VMMonitorContendedEnteredEvent *) eventData;
+	J9VMThread *currentThread = event->currentThread;
+	PORT_ACCESS_FROM_VMC(currentThread);
+
+#if defined(DEBUG)
+	j9tty_printf(PORTLIB, "\n!!! VM monitor entered %p\n", currentThread);
+#endif /* defined(DEBUG) */
+
+	J9JFRMonitorEntered *jfrEvent = (J9JFRMonitorEntered*)reserveBufferWithStackTrace(currentThread, currentThread, J9JFR_EVENT_TYPE_MONITOR_ENTER, sizeof(*jfrEvent));
+	if (NULL != jfrEvent) {
+		initializeEventFields(currentThread, (J9JFREvent *)jfrEvent, J9JFR_EVENT_TYPE_MONITOR_ENTER);
+
+		jfrEvent->duration = j9time_nano_time() - event->startTicks;
+		jfrEvent->monitorClass = event->monitorClass;
+		jfrEvent->monitorAddress = event->monitorAddress;
+	}
+}
+
+/**
  * Hook for VM thread parked. Called without VM access.
  *
  * @param hook[in] the VM hook interface
@@ -749,7 +782,9 @@ initializeJFR(J9JavaVM *vm, BOOLEAN lateInit)
 	if ((*vmHooks)->J9HookRegisterWithCallSite(vmHooks, J9HOOK_VM_MONITOR_WAITED, jfrVMMonitorWaited, OMR_GET_CALLSITE(), NULL)) {
 		goto fail;
 	}
-
+	if ((*vmHooks)->J9HookRegisterWithCallSite(vmHooks, J9HOOK_VM_MONITOR_CONTENDED_ENTERED, jfrVMMonitorEntered, OMR_GET_CALLSITE(), NULL)) {
+		goto fail;
+	}
 	if ((*vmHooks)->J9HookRegisterWithCallSite(vmHooks, J9HOOK_VM_UNPARKED, jfrVMThreadParked, OMR_GET_CALLSITE(), NULL)) {
 		goto fail;
 	}
@@ -884,6 +919,7 @@ tearDownJFR(J9JavaVM *vm)
 	/* Unregister it anyway even it wasn't registered for initializeJFR(vm, TRUE). */
 	(*vmHooks)->J9HookUnregister(vmHooks, J9HOOK_VM_INITIALIZED, jfrVMInitialized, NULL);
 	(*vmHooks)->J9HookUnregister(vmHooks, J9HOOK_VM_MONITOR_WAITED, jfrVMMonitorWaited, NULL);
+	(*vmHooks)->J9HookUnregister(vmHooks, J9HOOK_VM_MONITOR_CONTENDED_ENTERED, jfrVMMonitorEntered, NULL );
 	(*vmHooks)->J9HookUnregister(vmHooks, J9HOOK_VM_UNPARKED, jfrVMThreadParked, NULL);
 
 	/* Free global data */
