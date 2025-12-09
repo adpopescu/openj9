@@ -363,6 +363,8 @@ MM_RealtimeGC::internalPreCollect(MM_EnvironmentBase *env, MM_MemorySubSpace *su
 	env->_cycleState->_collectionStatistics = &_collectionStatistics;
 	_extensions->globalGCStats.gcCount += 1;
 	env->_cycleState->_currentCycleID = _extensions->getUniqueGCCycleCount();
+	OMRPORT_ACCESS_FROM_ENVIRONMENT(env);
+	omrtty_printf("\n-- Set Cycle ID: Realtime  --\nGC ID: %d\n\n", env->_cycleState->_currentCycleID );
 
 	/* If we are in an excessiveGC level beyond normal then an aggressive GC is
 	 * conducted to free up as much space as possible
