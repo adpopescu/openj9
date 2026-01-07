@@ -920,6 +920,7 @@ MM_IncrementalGenerationalGC::partialGarbageCollectPreWork(MM_EnvironmentVLHGC *
 
 	/* Perform any main-specific setup */
 	_extensions->globalVLHGCStats.gcCount += 1;
+	env->_cycleState->_startTime = omrtime_hires_clock();
 
 	/*
 	 * Core collection work.
@@ -1072,6 +1073,7 @@ MM_IncrementalGenerationalGC::runGlobalMarkPhaseIncrement(MM_EnvironmentVLHGC *e
 
 	/* If a GMP hasn't already begun, this will be the first increment of a new cycle */
 	if(!isGlobalMarkPhaseRunning()) {
+		env->_cycleState->_startTime = omrtime_hires_clock();
 		reportGMPCycleStart(env);
 		/* Inform scheduling delegate that it's internal metrics need to update/reset */
 		_schedulingDelegate.globalMarkCycleStart(env);
@@ -1153,6 +1155,7 @@ MM_IncrementalGenerationalGC::runGlobalGarbageCollection(MM_EnvironmentVLHGC *en
 	if(isGlobalMarkPhaseRunning()) {
 		reportGMPCycleContinue(env);
 	} else {
+		env->_cycleState->_startTime = omrtime_hires_clock();
 		reportGCCycleStart(env);
 	}
 	reportGlobalGCStart(env);

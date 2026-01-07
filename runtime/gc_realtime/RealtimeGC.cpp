@@ -362,6 +362,7 @@ MM_RealtimeGC::internalPreCollect(MM_EnvironmentBase *env, MM_MemorySubSpace *su
 	env->_cycleState->_type = _cycleType;
 	env->_cycleState->_activeSubSpace = subSpace;
 	env->_cycleState->_collectionStatistics = &_collectionStatistics;
+	env->_cycleState->_startTime = omrtime_hires_clock();
 
 	/* If we are in an excessiveGC level beyond normal then an aggressive GC is
 	 * conducted to free up as much space as possible
