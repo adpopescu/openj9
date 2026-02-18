@@ -27,6 +27,12 @@
 #include "JFRChunkWriter.hpp"
 #include "JFRConstantPoolTypes.hpp"
 
+#define J9VM_JFR_GC_DEBUG_DUMP 1
+
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+
 void
 VM_JFRChunkWriter::writeJFRHeader()
 {
@@ -834,6 +840,54 @@ VM_JFRChunkWriter::writeNarrowOOPModeTypesEvent()
 }
 
 void
+VM_JFRChunkWriter::writeGCNameTypesEvent()
+{
+	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+
+	/* class ID */
+	_bufferWriter->writeLEB128(GCNamesID);
+
+	/* number of states */
+	_bufferWriter->writeLEB128(GCNameTypeCount);
+
+	for (int i = 0; i < GCNameTypeCount; i++) {
+		/* constant index */
+		_bufferWriter->writeLEB128(i);
+
+		/* write string */
+		writeStringLiteral(gcNames[i]);
+	}
+
+	/* write size */
+	writeEventSize(dataStart);
+
+}
+
+void
+VM_JFRChunkWriter::writeGCCauseTypesEvent()
+{
+	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+
+	/* class ID */
+	_bufferWriter->writeLEB128(GCCausesID);
+
+	/* number of states */
+	_bufferWriter->writeLEB128(GCCauseTypeCount);
+
+	for (int i = 0; i < GCCauseTypeCount; i++) {
+		/* constant index */
+		_bufferWriter->writeLEB128(i);
+
+		/* write string */
+		writeStringLiteral(gcCauses[i]);
+	}
+
+	/* write size */
+	writeEventSize(dataStart);
+
+}
+
+void
 VM_JFRChunkWriter::writeGCHeapConfigurationEvent()
 {
 	GCHeapConfigurationEntry *gcConfig = &(VM_JFRConstantPoolTypes::getJFRConstantEvents(_vm)->GCHeapConfigEntry);
@@ -1505,8 +1559,7 @@ void
 VM_JFRChunkWriter::writeGarbageCollectionEvent(void *anElement, void *userData)
 {
 	GarbageCollectionEntry *entry = (GarbageCollectionEntry *)anElement;
-	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
-	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
+	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
@@ -1524,10 +1577,10 @@ VM_JFRChunkWriter::writeGarbageCollectionEvent(void *anElement, void *userData)
 	bufferWriter->writeLEB128(entry->gcID);
 
 	/* Write name of this collection */
-	writer->writeStringLiteral(gcNames[entry->gcNameID]);
+	bufferWriter->writeLEB128(entry->gcNameID);
 
 	/* Write cause of this collection */
-	writer->writeStringLiteral(gcCauses[entry->gcCauseID]);
+	bufferWriter->writeLEB128(entry->gcCauseID);
 
 	/* Write sum of pauses during collection */
 	bufferWriter->writeLEB128(entry->sumOfPauses);
@@ -1537,6 +1590,98 @@ VM_JFRChunkWriter::writeGarbageCollectionEvent(void *anElement, void *userData)
 
 	/* Write size */
 	writeEventSize(bufferWriter, dataStart);
+
+/* ---------------- DEBUG DUMP: GC event only (text + raw bytes) ----------------
+*
+* Outputs:
+* gc_event.txt : one line per event with decoded values
+* gc_event.bin : repeated blocks of [u64_le record_len][record_bytes]
+*
+* record_bytes format we write here:
+* uleb128(event_size) + uleb128(event_type) + uleb128(ticks) + uleb128(duration)
+* + uleb128(gcID) + uleb128(gcNameID) + uleb128(gcCauseID)
+* + uleb128(sumOfPauses) + uleb128(longestPause)
+*
+* This matches your fork’s writeGarbageCollectionEvent field order. :contentReference[oaicite:1]{index=1}
+*/
+
+#if defined(J9VM_JFR_GC_DEBUG_DUMP)
+
+auto uleb128_put = [](uint8_t *dst, size_t cap, uint64_t v) -> size_t {
+size_t n = 0;
+do {
+if (n >= cap) { return 0; }
+uint8_t byte = (uint8_t)(v & 0x7Fu);
+v >>= 7;
+if (v != 0) { byte |= 0x80u; }
+dst[n++] = byte;
+} while (v != 0);
+return n;
+};
+
+auto write_u64_le = [](FILE *f, uint64_t v) {
+uint8_t le[8];
+for (int i = 0; i < 8; i++) {
+le[i] = (uint8_t)((v >> (8 * i)) & 0xFFu);
+}
+fwrite(le, 1, 8, f);
+};
+
+/* 1) Text dump */
+if (FILE *ft = std::fopen("gc_event.txt", "ab")) {
+// Use unsigned prints since all fields written via writeLEB128 here are non-negative.
+// Cast carefully to avoid platform differences with UDATA.
+char line[512];
+std::snprintf(
+line, sizeof(line),
+"GC: ticks=%llu duration=%llu gcID=%llu gcNameID=%u gcCauseID=%u sumOfPauses=%llu longestPause=%llu\n",
+(unsigned long long)entry->ticks,
+(unsigned long long)entry->duration,
+(unsigned long long)entry->gcID,
+(unsigned)entry->gcNameID,
+(unsigned)entry->gcCauseID,
+(unsigned long long)entry->sumOfPauses,
+(unsigned long long)entry->longestPause
+);
+std::fwrite(line, 1, std::strlen(line), ft);
+std::fclose(ft);
+}
+
+/* 2) Raw bytes dump (self-contained record) */
+uint8_t rec[128];
+size_t p = 0;
+
+/* Build payload first (everything after event_size) */
+uint8_t payload[128];
+size_t q = 0;
+
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)GarbageCollectionID);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->ticks);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->duration);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->gcID);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->gcNameID);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->gcCauseID);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->sumOfPauses);
+q += uleb128_put(payload + q, sizeof(payload) - q, (uint64_t)entry->longestPause);
+
+if (q > 0) {
+/* event_size is payload length (common JFR style: bytes after size field) */
+size_t n_size = uleb128_put(rec + p, sizeof(rec) - p, (uint64_t)q);
+if (n_size > 0 && (p + n_size + q) <= sizeof(rec)) {
+p += n_size;
+std::memcpy(rec + p, payload, q);
+p += q;
+
+if (FILE *fb = std::fopen("gc_event.bin", "ab")) {
+write_u64_le(fb, (uint64_t)p); // record_len
+std::fwrite(rec, 1, p, fb); // record_bytes
+std::fclose(fb);
+}
+}
+}
+
+#endif /* J9VM_JFR_GC_DEBUG_DUMP */
+/* ---------------- END DEBUG DUMP ---------------- */
 }
 
 void

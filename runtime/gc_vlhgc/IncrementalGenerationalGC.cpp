@@ -839,6 +839,7 @@ MM_IncrementalGenerationalGC::taxationEntryPoint(MM_EnvironmentBase *envModron, 
 		env->_cycleState->_gcCode = MM_GCCode(J9MMCONSTANT_IMPLICIT_GC_DEFAULT);
 		env->_cycleState->_collectionType = MM_CycleState::CT_PARTIAL_GARBAGE_COLLECTION;
 		env->_cycleState->_type = OMR_GC_CYCLE_TYPE_VLHGC_PARTIAL_GARBAGE_COLLECT;
+		env->_collectionReason = MM_EnvironmentBase::gc_reason_alloc_taxation;
 		env->_cycleState->_activeSubSpace = subspace;
 		env->_cycleState->_referenceObjectOptions = MM_CycleState::references_default;
 		env->_cycleState->_collectionStatistics = &_partialCollectionStatistics;
@@ -861,6 +862,7 @@ MM_IncrementalGenerationalGC::taxationEntryPoint(MM_EnvironmentBase *envModron, 
 		env->_cycleState->_gcCode = MM_GCCode(J9MMCONSTANT_IMPLICIT_GC_DEFAULT);
 		env->_cycleState->_collectionType = MM_CycleState::CT_GLOBAL_MARK_PHASE;
 		env->_cycleState->_type = OMR_GC_CYCLE_TYPE_VLHGC_GLOBAL_MARK_PHASE;
+		env->_collectionReason = MM_EnvironmentBase::gc_reason_alloc_taxation;
 		env->_cycleState->_activeSubSpace = subspace;
 		env->_cycleState->_referenceObjectOptions = MM_CycleState::references_default;
 		env->_cycleState->_collectionStatistics = &_globalCollectionStatistics;
@@ -1014,8 +1016,8 @@ MM_IncrementalGenerationalGC::partialGarbageCollectPostWork(MM_EnvironmentVLHGC 
 	PORT_ACCESS_FROM_ENVIRONMENT(env);
 	env->_cycleState->_endTime = j9time_hires_clock();
 
-	reportGCCycleFinalIncrementEnding(env);
 	reportGCIncrementEnd(env);
+	reportGCCycleFinalIncrementEnding(env);
 	reportPGCEnd(env);
 	reportGCCycleEnd(env);
 
@@ -1128,10 +1130,10 @@ MM_IncrementalGenerationalGC::runGlobalMarkPhaseIncrement(MM_EnvironmentVLHGC *e
 		PORT_ACCESS_FROM_ENVIRONMENT(env);
 		env->_cycleState->_endTime = j9time_hires_clock();
 
-		reportGCCycleFinalIncrementEnding(env);
 		/* TODO: TEMPORARY: This is a temporary call that should be deleted once the new verbose format is in place */
 		/* NOTE: May want to move any tracepoints up into this routine */
 		reportGCIncrementEnd(env);
+		reportGCCycleFinalIncrementEnding(env);
 		reportGMPIncrementEnd(env);
 		reportGMPCycleEnd(env);
 		/* Remember how many PGC's occured per GMP cycle, so that we can weight GMP cost properly */
@@ -1256,10 +1258,10 @@ MM_IncrementalGenerationalGC::runGlobalGarbageCollection(MM_EnvironmentVLHGC *en
 	PORT_ACCESS_FROM_ENVIRONMENT(env);
 	env->_cycleState->_endTime = j9time_hires_clock();
 
-	reportGCCycleFinalIncrementEnding(env);
 	/* TODO: TEMPORARY: This is a temporary call that should be deleted once the new verbose format is in place */
 	/* NOTE: May want to move any tracepoints up into this routine */
 	reportGCIncrementEnd(env);
+	reportGCCycleFinalIncrementEnding(env);
 	reportGlobalGCEnd(env);
 	reportGCCycleEnd(env);
 
