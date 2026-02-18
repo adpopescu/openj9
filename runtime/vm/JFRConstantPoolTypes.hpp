@@ -311,10 +311,10 @@ struct GarbageCollectionEntry {
 	I_64 ticks;
 	I_64 duration;
 	UDATA gcID;
-	U_32 gcNameID;
-	U_32 gcCauseID;
-	I_64 sumOfPauses;
-	I_64 longestPause;
+	UDATA gcNameID;
+	UDATA gcCauseID;
+	U_64 sumOfPauses;
+	U_64 longestPause;
 };
 
 struct VirtualSpaceEntry {

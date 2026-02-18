@@ -57,7 +57,13 @@ static constexpr const char * const oopModeTypeNames[] = {
 };
 
 static constexpr const char * const gcNames[] = {
-	"default"
+	"default",
+	"global",
+	"scavenge",
+	"partial garbage collect",
+	"global mark phase",
+	"global garbage collect",
+	"epsilon"
 };
 
 static constexpr const char * const gcCauses[] = {
@@ -447,7 +453,7 @@ done:
 
 			pool_do(_constantPoolTypes.getYoungGarbageCollectionTable(), &writeYoungGarbageCollectionEvent, _bufferWriter);
 
-			pool_do(_constantPoolTypes.getGarbageCollectionTable(), &writeGarbageCollectionEvent, _bufferWriter);
+			pool_do(_constantPoolTypes.getGarbageCollectionTable(), &writeGarbageCollectionEvent, this);
 
 			pool_do(_constantPoolTypes.getGCHeapSummaryTable(), &writeGCHeapSummaryEvent, _bufferWriter);
 

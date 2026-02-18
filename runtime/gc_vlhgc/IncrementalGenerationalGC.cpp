@@ -839,6 +839,7 @@ MM_IncrementalGenerationalGC::taxationEntryPoint(MM_EnvironmentBase *envModron, 
 		env->_cycleState->_gcCode = MM_GCCode(J9MMCONSTANT_IMPLICIT_GC_DEFAULT);
 		env->_cycleState->_collectionType = MM_CycleState::CT_PARTIAL_GARBAGE_COLLECTION;
 		env->_cycleState->_type = OMR_GC_CYCLE_TYPE_VLHGC_PARTIAL_GARBAGE_COLLECT;
+		env->_collectionReason = MM_EnvironmentBase::gc_reason_alloc_taxation;
 		env->_cycleState->_activeSubSpace = subspace;
 		env->_cycleState->_referenceObjectOptions = MM_CycleState::references_default;
 		env->_cycleState->_collectionStatistics = &_partialCollectionStatistics;
@@ -861,6 +862,7 @@ MM_IncrementalGenerationalGC::taxationEntryPoint(MM_EnvironmentBase *envModron, 
 		env->_cycleState->_gcCode = MM_GCCode(J9MMCONSTANT_IMPLICIT_GC_DEFAULT);
 		env->_cycleState->_collectionType = MM_CycleState::CT_GLOBAL_MARK_PHASE;
 		env->_cycleState->_type = OMR_GC_CYCLE_TYPE_VLHGC_GLOBAL_MARK_PHASE;
+		env->_collectionReason = MM_EnvironmentBase::gc_reason_alloc_taxation;
 		env->_cycleState->_activeSubSpace = subspace;
 		env->_cycleState->_referenceObjectOptions = MM_CycleState::references_default;
 		env->_cycleState->_collectionStatistics = &_globalCollectionStatistics;
