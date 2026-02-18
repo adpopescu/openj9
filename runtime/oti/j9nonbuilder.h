@@ -525,10 +525,10 @@ typedef struct J9JFRGarbageCollection {
 	J9JFR_EVENT_COMMON_FIELDS
 	I_64 duration;
 	UDATA gcID;
-	U_32 gcNameID;
-	U_32 gcCauseID;
-	I_64 sumOfPauses;
-	I_64 longestPause;
+	UDATA gcNameID;
+	UDATA gcCauseID;
+	U_64 sumOfPauses;
+	U_64 longestPause;
 } J9JFRGarbageCollection;
 
 typedef struct J9JFRGCHeapSummary {
@@ -5094,6 +5094,10 @@ typedef struct J9MemoryManagerFunctions {
 	U_64  ( *j9gc_get_cycle_start_time)(struct J9VMThread *vmThread) ;
 	U_64  ( *j9gc_get_cycle_end_time)(struct J9VMThread *vmThread) ;
 	UDATA  ( *j9gc_get_tenure_threshold)(struct J9JavaVM *javaVM) ;
+	UDATA  ( *j9gc_get_gc_collector_type)(struct J9VMThread *vmThread);
+	UDATA  ( *j9gc_get_gc_cause_type)(struct J9VMThread *vmThread) ;
+	U_64  ( *j9gc_get_longest_pause)(struct J9VMThread *vmThread) ;
+	U_64  ( *j9gc_get_sum_of_pauses)(struct J9VMThread *vmThread) ;
 	UDATA  ( *j9gc_modron_global_collect)(struct J9VMThread *vmThread) ;
 	UDATA  ( *j9gc_modron_global_collect_with_overrides)(struct J9VMThread *vmThread, U_32 overrideFlags) ;
 	UDATA  ( *j9gc_modron_local_collect)(struct J9VMThread *vmThread) ;
