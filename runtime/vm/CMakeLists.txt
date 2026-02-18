@@ -440,6 +440,7 @@ target_link_libraries(j9vm
 		j9vm_gc_includes
 
 		omrcore
+		j9gcbase
 		j9verutil
 		j9thr
 		j9util
