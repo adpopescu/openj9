@@ -616,7 +616,7 @@ MM_CopyForwardScheme::isLiveObject(J9Object *objectPtr)
 }
 
 
-MMINLINE bool
+bool
 MM_CopyForwardScheme::isObjectInEvacuateMemory(J9Object *objectPtr)
 {
 	bool result = false;
@@ -627,7 +627,7 @@ MM_CopyForwardScheme::isObjectInEvacuateMemory(J9Object *objectPtr)
 	return result;
 }
 
-MMINLINE bool
+bool
 MM_CopyForwardScheme::isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr)
 {
 	bool result = false;
@@ -638,7 +638,7 @@ MM_CopyForwardScheme::isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr)
 	return result;
 }
 
-MMINLINE bool
+bool
 MM_CopyForwardScheme::isObjectInSurvivorMemory(J9Object *objectPtr)
 {
 	bool result = false;
@@ -655,7 +655,7 @@ MM_CopyForwardScheme::isObjectInSurvivorMemory(J9Object *objectPtr)
 	return result;
 }
 
-MMINLINE bool
+bool
 MM_CopyForwardScheme::isObjectInNurseryMemory(J9Object *objectPtr)
 {
 	bool result = false;

@@ -438,22 +438,22 @@ private:
 	 * @param objectPtr[in] Object pointer whose properties are being examined.
 	 * @return true if the object is found in evacuate memory, false otherwise.
 	 */
-	MMINLINE bool isObjectInEvacuateMemory(J9Object *objectPtr);
-	MMINLINE bool isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr);
+	bool isObjectInEvacuateMemory(J9Object *objectPtr);
+	bool isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr);
 
 	/**
 	 * Determine whether the object is in survivor memory or not.
 	 * @param objectPtr[in] Object pointer whose properties are being examined.
 	 * @return true if the object is found in survivor memory, false otherwise.
 	 */
-	MMINLINE bool isObjectInSurvivorMemory(J9Object *objectPtr);
+	bool isObjectInSurvivorMemory(J9Object *objectPtr);
 
 	/**
 	 * Determine whether the object is in evacuate/survivor memory or not.
 	 * @param objectPtr[in] Object pointer whose properties are being examined.
 	 * @return true if the object is found in evacuate/survivor memory, false otherwise.
 	 */
-	MMINLINE bool isObjectInNurseryMemory(J9Object *objectPtr);
+	bool isObjectInNurseryMemory(J9Object *objectPtr);
 
 	/**
 	 * Remove any remaining regions from the reserved allocation list.
