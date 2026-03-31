@@ -133,6 +133,8 @@ private:
 	void *_heapBase;  /**< Cached base pointer of heap */
 	void *_heapTop;  /**< Cached top pointer of heap */
 
+	uint8_t _regionShift;
+
 	volatile bool _abortFlag;  /**< Flag indicating whether the current copy forward cycle should be aborted due to insufficient heap to complete */
 	bool _abortInProgress;  /**< Flag indicating that the copy forward mechanism is now operating in abort mode, which is attempting to secure integrity of the heap to continue execution */
 
@@ -160,6 +162,8 @@ private:
 	const uintptr_t _objectAlignmentInBytes;	/**< Run-time objects alignment in bytes */
 
 	uintptr_t *_compressedSurvivorTable;	/**< start address of compressed survivor table (1 bit presents CARD_SIZE of Heap) */
+
+	bool *_regionShouldMark;
 
 protected:
 public:
@@ -1114,6 +1118,14 @@ public:
 	}
 
 	void abandonTLHRemainders(MM_EnvironmentVLHGC *env);
+
+	/**
+	 * Update the cached _regionShouldMark value for a specific region.
+	 * This should be called whenever region->_markData._shouldMark is modified.
+	 * @param region The region whose cache entry should be updated
+	 * @param shouldMark The new value for _shouldMark
+	 */
+	void updateRegionShouldMarkCache(MM_HeapRegionDescriptorVLHGC *region, bool shouldMark);
 
 	MMINLINE void doSlot(MM_EnvironmentVLHGC *env, J9Object *fromObject, J9Object **slotPtr);
 #if JAVA_SPEC_VERSION >= 24

@@ -36,7 +36,10 @@
 #include "ProjectedSurvivalCollectionSetDelegate.hpp"
 #include "CompactGroupManager.hpp"
 #include "CompactGroupPersistentStats.hpp"
+#include "CopyForwardDelegate.hpp"
+#include "CopyForwardScheme.hpp"
 #include "CycleState.hpp"
+#include "IncrementalGenerationalGC.hpp"
 #include "EnvironmentVLHGC.hpp"
 #include "GlobalAllocationManagerTarok.hpp"
 #include "MemorySubSpace.hpp"
@@ -216,6 +219,14 @@ MM_ProjectedSurvivalCollectionSetDelegate::selectRegion(MM_EnvironmentVLHGC *env
 	UDATA projectedReclaimableBytes = region->getProjectedReclaimableBytes();
 
 	region->_markData._shouldMark = true;
+	/* Update the cache in CopyForwardScheme */
+	MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+	if (NULL != gc) {
+		MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+		if (NULL != copyForwardScheme) {
+			copyForwardScheme->updateRegionShouldMarkCache(region, true);
+		}
+	}
 	region->_reclaimData._shouldReclaim = true;
 	region->_compactData._shouldCompact = false;
 	region->_defragmentationTarget = false;
@@ -464,6 +475,14 @@ MM_ProjectedSurvivalCollectionSetDelegate::deleteRegionCollectionSetForPartialGC
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
 
 		region->_markData._shouldMark = false;
+		/* Update the cache in CopyForwardScheme */
+		MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+		if (NULL != gc) {
+			MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+			if (NULL != copyForwardScheme) {
+				copyForwardScheme->updateRegionShouldMarkCache(region, false);
+			}
+		}
 		region->_markData._noEvacuation = false;
 		region->_reclaimData._shouldReclaim = false;
 	}

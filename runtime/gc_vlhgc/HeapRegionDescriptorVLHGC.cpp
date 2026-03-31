@@ -30,7 +30,10 @@
 #include "AllocationContextTarok.hpp"
 #include "CompactGroupManager.hpp"
 #include "CompactGroupPersistentStats.hpp"
+#include "CopyForwardDelegate.hpp"
+#include "CopyForwardScheme.hpp"
 #include "EnvironmentVLHGC.hpp"
+#include "IncrementalGenerationalGC.hpp"
 #include "InterRegionRememberedSet.hpp"
 
 MM_HeapRegionDescriptorVLHGC::MM_HeapRegionDescriptorVLHGC(MM_EnvironmentVLHGC *env, void *lowAddress, void *highAddress)
@@ -70,6 +73,15 @@ MM_HeapRegionDescriptorVLHGC::initialize(MM_EnvironmentBase *env, MM_HeapRegionM
 	}
 
 	_markData._shouldMark = false;
+	/* Update the cache in CopyForwardScheme */
+	MM_GCExtensions *extensions = MM_GCExtensions::getExtensions(env);
+	MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)extensions->getGlobalCollector();
+	if (NULL != gc) {
+		MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+		if (NULL != copyForwardScheme) {
+			copyForwardScheme->updateRegionShouldMarkCache(this, false);
+		}
+	}
 	_markData._noEvacuation = false;
 	_markData._dynamicMarkCost = 0;
 	_markData._overflowFlags = 0x0;
@@ -92,7 +104,6 @@ MM_HeapRegionDescriptorVLHGC::initialize(MM_EnvironmentBase *env, MM_HeapRegionM
 #endif /* defined (J9VM_GC_MODRON_COMPACTION) */
 
 	/* add our unfinalized list to the global list (no locking - assumes single threaded initialization) */
-	MM_GCExtensions* extensions = MM_GCExtensions::getExtensions(env);
 	_unfinalizedObjectList.setNextList(extensions->unfinalizedObjectLists);
 	_unfinalizedObjectList.setPreviousList(NULL);
 	if (NULL != extensions->unfinalizedObjectLists) {

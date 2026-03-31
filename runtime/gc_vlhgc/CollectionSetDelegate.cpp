@@ -35,6 +35,9 @@
 #include "AllocationContextTarok.hpp"
 #include "CollectionSetDelegate.hpp"
 #include "CompactGroupManager.hpp"
+#include "CopyForwardDelegate.hpp"
+#include "CopyForwardScheme.hpp"
+#include "IncrementalGenerationalGC.hpp"
 #include "CompactGroupPersistentStats.hpp"
 #include "CycleState.hpp"
 #include "EnvironmentVLHGC.hpp"
@@ -177,6 +180,14 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 					/* on collection phase, mark all non-overflowed regions and those that RSCL is not being rebuilt */
 					/* sweep/compact flags are set in ReclaimDelegate */
 					region->_markData._shouldMark = true;
+					/* Update the cache in CopyForwardScheme */
+					MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+					if (NULL != gc) {
+						MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+						if (NULL != copyForwardScheme) {
+							copyForwardScheme->updateRegionShouldMarkCache(region, true);
+						}
+					}
 					region->_reclaimData._shouldReclaim = true;
 					region->_compactData._shouldCompact = false;
 					/* Collected regions are no longer target for defragmentation until next GMP */
@@ -219,6 +230,14 @@ MM_CollectionSetDelegate::selectRegionsForBudget(MM_EnvironmentVLHGC *env, UDATA
 		if(regionSelectionIndex >= regionSelectionThreshold) {
 			/* The region is to be selected as part of the dynamic set */
 			regionSelectionPtr->_markData._shouldMark = true;
+			/* Update the cache in CopyForwardScheme */
+			MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+			if (NULL != gc) {
+				MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+				if (NULL != copyForwardScheme) {
+					copyForwardScheme->updateRegionShouldMarkCache(regionSelectionPtr, true);
+				}
+			}
 			regionSelectionPtr->_reclaimData._shouldReclaim = true;
 			regionSelectionPtr->_compactData._shouldCompact = false;
 			/* Collected regions are no longer target for defragmentation until the next GMP */
@@ -464,6 +483,14 @@ MM_CollectionSetDelegate::deleteRegionCollectionSetForPartialGC(MM_EnvironmentVL
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
 
 		region->_markData._shouldMark = false;
+		/* Update the cache in CopyForwardScheme */
+		MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+		if (NULL != gc) {
+			MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+			if (NULL != copyForwardScheme) {
+				copyForwardScheme->updateRegionShouldMarkCache(region, false);
+			}
+		}
 		region->_reclaimData._shouldReclaim = false;
 		region->_markData._noEvacuation = false;
 	}

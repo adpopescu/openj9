@@ -249,6 +249,15 @@ public:
 	}
 
 	/**
+	 * Get the IGGC's copyForwardDelegate.
+	 * @returns @ref _copyForwardDelegate
+	 */
+	MMINLINE MM_CopyForwardDelegate *getCopyForwardDelegate()
+	{
+		return &_copyForwardDelegate;
+	}
+
+	/**
 	 * Get the last (actual) sden size
 	 * @returns eden size
 	 */

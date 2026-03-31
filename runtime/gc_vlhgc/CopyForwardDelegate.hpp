@@ -129,6 +129,15 @@ public:
 	{
 		return _breadthFirstCopyForwardScheme->isConcurrentCycleInProgress();
 	}
+
+	/**
+	 * Get the CopyForwardScheme instance
+	 * @return pointer to the CopyForwardScheme instance
+	 */
+	MMINLINE MM_CopyForwardScheme* getCopyForwardScheme()
+	{
+		return _breadthFirstCopyForwardScheme;
+	}
 };
 
 

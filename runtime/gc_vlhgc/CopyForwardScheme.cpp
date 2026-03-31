@@ -176,6 +176,7 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _markMap(NULL)
 	, _heapBase(NULL)
 	, _heapTop(NULL)
+	, _regionShift((uint8_t)_regionManager->getRegionShift())
 	, _abortFlag(false)
 	, _abortInProgress(false)
 	, _regionCountCannotBeEvacuated(0)
@@ -195,6 +196,7 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _shouldScanFinalizableObjects(false)
 	, _objectAlignmentInBytes(env->getObjectAlignmentInBytes())
 	, _compressedSurvivorTable(NULL)
+	, _regionShouldMark(NULL)
 {
 	_typeId = __FUNCTION__;
 }
@@ -336,6 +338,12 @@ MM_CopyForwardScheme::initialize(MM_EnvironmentVLHGC *env)
 		return false;
 	}
 
+	_regionShouldMark  = (bool *)env->getForge()->allocate(_regionManager->getTableRegionCount() * sizeof(bool), MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
+	if (NULL == _regionShouldMark) {
+		return false;
+	}
+	memset(_regionShouldMark, 0, _regionManager->getTableRegionCount() * sizeof(bool));
+
 	return true;
 }
 
@@ -381,6 +389,11 @@ MM_CopyForwardScheme::tearDown(MM_EnvironmentVLHGC *env)
 	if (NULL != _compressedSurvivorTable) {
 		env->getForge()->free(_compressedSurvivorTable);
 		_compressedSurvivorTable = NULL;
+	}
+
+	if (NULL != _regionShouldMark) {
+		env->getForge()->free(_regionShouldMark);
+		_regionShouldMark = NULL;
 	}
 }
 
@@ -480,6 +493,7 @@ MM_CopyForwardScheme::preProcessRegions(MM_EnvironmentVLHGC *env)
 	while (NULL != (region = regionIterator.nextRegion())) {
 		region->_copyForwardData._survivor = false;
 		region->_copyForwardData._freshSurvivor = false;
+		_regionShouldMark[_regionManager->mapDescriptorToRegionTableIndex(region)] = region->_markData._shouldMark;
 		if (region->containsObjects()) {
 			region->_copyForwardData._initialLiveSet = true;
 			region->_copyForwardData._evacuateSet = region->_markData._shouldMark;
@@ -568,6 +582,7 @@ MM_CopyForwardScheme::postProcessRegions(MM_EnvironmentVLHGC *env)
 		region->_copyForwardData._requiresPhantomReferenceProcessing = false;
 		region->_copyForwardData._survivor = false;
 		region->_copyForwardData._freshSurvivor = false;
+		_regionShouldMark[_regionManager->mapDescriptorToRegionTableIndex(region)] = region->_markData._shouldMark;
 
 		if (region->_copyForwardData._evacuateSet) {
 			Assert_MM_true(region->_sweepData._alreadySwept);
@@ -630,12 +645,9 @@ MM_CopyForwardScheme::isObjectInEvacuateMemory(J9Object *objectPtr)
 MMINLINE bool
 MM_CopyForwardScheme::isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr)
 {
-	bool result = false;
-
-	MM_HeapRegionDescriptorVLHGC *region = NULL;
-	region = (MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(objectPtr);
-	result = region->_markData._shouldMark;
-	return result;
+	uintptr_t heapDelta = (uintptr_t)objectPtr - (uintptr_t)_heapBase;
+	uintptr_t regionIndex = heapDelta >> _regionShift;
+	return _regionShouldMark[regionIndex];
 }
 
 MMINLINE bool
@@ -5774,6 +5786,15 @@ MM_CopyForwardScheme::cleanCompressedSurvivorCardTable(MM_EnvironmentVLHGC *env)
 {
 	uintptr_t compressedSurvivorTableSize = _extensions->heap->getMaximumPhysicalRange() / (CARD_SIZE * BITS_PER_BYTE);
 	memset((void *)_compressedSurvivorTable, AllCompressedCardsInByteClean, compressedSurvivorTableSize);
+}
+
+void
+MM_CopyForwardScheme::updateRegionShouldMarkCache(MM_HeapRegionDescriptorVLHGC *region, bool shouldMark)
+{
+	if (NULL != _regionShouldMark) {
+		uintptr_t regionIndex = _regionManager->mapDescriptorToRegionTableIndex(region);
+		_regionShouldMark[regionIndex] = shouldMark;
+	}
 }
 
 void
