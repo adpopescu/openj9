@@ -176,6 +176,7 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _markMap(NULL)
 	, _heapBase(NULL)
 	, _heapTop(NULL)
+	, _regionShift((uint16_t)_regionManager->getRegionShift()) // assert if shift >= 2^16
 	, _abortFlag(false)
 	, _abortInProgress(false)
 	, _regionCountCannotBeEvacuated(0)
@@ -195,6 +196,7 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _shouldScanFinalizableObjects(false)
 	, _objectAlignmentInBytes(env->getObjectAlignmentInBytes())
 	, _compressedSurvivorTable(NULL)
+	, _regionShouldMark(NULL)
 {
 	_typeId = __FUNCTION__;
 }
@@ -336,6 +338,11 @@ MM_CopyForwardScheme::initialize(MM_EnvironmentVLHGC *env)
 		return false;
 	}
 
+	_regionShouldMark  = (bool *)env->getForge()->allocate(_regionManager->getTableRegionCount(), MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
+	if (NULL == _regionShouldMark) {
+		return false;
+	}
+
 	return true;
 }
 
@@ -381,6 +388,11 @@ MM_CopyForwardScheme::tearDown(MM_EnvironmentVLHGC *env)
 	if (NULL != _compressedSurvivorTable) {
 		env->getForge()->free(_compressedSurvivorTable);
 		_compressedSurvivorTable = NULL;
+	}
+
+	if (NULL != _regionShouldMark) {
+		env->getForge()->free(_regionShouldMark);
+		_regionShouldMark = NULL;
 	}
 }
 
@@ -481,6 +493,7 @@ MM_CopyForwardScheme::preProcessRegions(MM_EnvironmentVLHGC *env)
 		region->_copyForwardData._survivor = false;
 		region->_copyForwardData._freshSurvivor = false;
 		if (region->containsObjects()) {
+			_regionShouldMark[_regionManager->mapDescriptorToRegionTableIndex(region)] = region->_markData._shouldMark;
 			region->_copyForwardData._initialLiveSet = true;
 			region->_copyForwardData._evacuateSet = region->_markData._shouldMark;
 			if (region->_markData._shouldMark) {
@@ -641,18 +654,21 @@ MM_CopyForwardScheme::isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr)
 bool
 MM_CopyForwardScheme::isObjectInSurvivorMemory(J9Object *objectPtr)
 {
-	bool result = false;
+	uintptr_t heapDelta = (uintptr_t)objectPtr - (uintptr_t)_heapBase;
+	uintptr_t regionIndex = heapDelta >> _regionShift;
+	return _regionShouldMark[regionIndex];
+//	bool result = false;
 
-	if (NULL != objectPtr) {
-		MM_HeapRegionDescriptorVLHGC *region = NULL;
-		region = (MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(objectPtr);
-		Assert_MM_true(region->_copyForwardData._initialLiveSet || (!region->_markData._shouldMark && !region->_copyForwardData._initialLiveSet));
-		result = region->isFreshSurvivorRegion();
-		if (!result && region->isSurvivorRegion()) {
-			result = isCompressedSurvivor((void *)objectPtr);
-		}
-	}
-	return result;
+//	if (NULL != objectPtr) {
+//		MM_HeapRegionDescriptorVLHGC *region = NULL;
+//		region = (MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(objectPtr);
+//		Assert_MM_true(region->_copyForwardData._initialLiveSet || (!region->_markData._shouldMark && !region->_copyForwardData._initialLiveSet));
+//		result = region->isFreshSurvivorRegion();
+//		if (!result && region->isSurvivorRegion()) {
+//			result = isCompressedSurvivor((void *)objectPtr);
+//		}
+//	}
+//	return result;
 }
 
 bool
