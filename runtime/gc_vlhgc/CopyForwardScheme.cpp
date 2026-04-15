@@ -196,7 +196,7 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _shouldScanFinalizableObjects(false)
 	, _objectAlignmentInBytes(env->getObjectAlignmentInBytes())
 	, _compressedSurvivorTable(NULL)
-	, _regionShouldMark(NULL)
+	, _regionShouldMarkMap(NULL)
 {
 	_typeId = __FUNCTION__;
 }
@@ -338,10 +338,12 @@ MM_CopyForwardScheme::initialize(MM_EnvironmentVLHGC *env)
 		return false;
 	}
 
-	_regionShouldMark  = (bool *)env->getForge()->allocate(_regionManager->getTableRegionCount(), MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
-	if (NULL == _regionShouldMark) {
+	uintptr_t regionShouldMarkMapSize = ((_regionManager->getTableRegionCount() + (BITS_PER_BYTE * sizeof(uintptr_t)) - 1) / (BITS_PER_BYTE * sizeof(uintptr_t))) * sizeof(uintptr_t);
+	_regionShouldMarkMap  = (uintptr_t *)env->getForge()->allocate(regionShouldMarkMapSize, MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
+	if (NULL == _regionShouldMarkMap) {
 		return false;
 	}
+	memset(_regionShouldMarkMap, 0, regionShouldMarkMapSize);
 
 	return true;
 }
@@ -390,9 +392,9 @@ MM_CopyForwardScheme::tearDown(MM_EnvironmentVLHGC *env)
 		_compressedSurvivorTable = NULL;
 	}
 
-	if (NULL != _regionShouldMark) {
-		env->getForge()->free(_regionShouldMark);
-		_regionShouldMark = NULL;
+	if (NULL != _regionShouldMarkMap) {
+		env->getForge()->free(_regionShouldMarkMap);
+		_regionShouldMarkMap = NULL;
 	}
 }
 
@@ -492,7 +494,14 @@ MM_CopyForwardScheme::preProcessRegions(MM_EnvironmentVLHGC *env)
 	while (NULL != (region = regionIterator.nextRegion())) {
 		region->_copyForwardData._survivor = false;
 		region->_copyForwardData._freshSurvivor = false;
-		_regionShouldMark[_regionManager->mapDescriptorToRegionTableIndex(region)] = region->_markData._shouldMark;
+		uintptr_t regionIndex = _regionManager->mapDescriptorToRegionTableIndex(region);
+		uintptr_t wordIndex = regionIndex / (BITS_PER_BYTE * sizeof(uintptr_t));
+		uintptr_t bitMask = ((uintptr_t)1) << (regionIndex % (BITS_PER_BYTE * sizeof(uintptr_t)));
+
+		_regionShouldMarkMap[wordIndex] &= ~bitMask;
+		if (region->_markData._shouldMark) {
+			_regionShouldMarkMap[wordIndex] |= bitMask;
+		}
 		if (region->containsObjects()) {
 			region->_copyForwardData._initialLiveSet = true;
 			region->_copyForwardData._evacuateSet = region->_markData._shouldMark;
@@ -645,7 +654,9 @@ MM_CopyForwardScheme::isObjectInEvacuateMemoryNoCheck(J9Object *objectPtr)
 {
 	uintptr_t heapDelta = (uintptr_t)objectPtr - (uintptr_t)_heapBase;
 	uintptr_t regionIndex = heapDelta >> _regionShift;
-	return _regionShouldMark[regionIndex];
+	uintptr_t wordIndex = regionIndex / (BITS_PER_BYTE * sizeof(uintptr_t));
+	uintptr_t bitMask = ((uintptr_t)1) << (regionIndex % (BITS_PER_BYTE * sizeof(uintptr_t)));
+	return 0 != (_regionShouldMarkMap[wordIndex] & bitMask);
 }
 
 bool

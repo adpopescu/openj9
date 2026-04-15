@@ -163,7 +163,7 @@ private:
 
 	uintptr_t *_compressedSurvivorTable;	/**< start address of compressed survivor table (1 bit presents CARD_SIZE of Heap) */
 
-	bool *_regionShouldMark;
+	uintptr_t *_regionShouldMarkMap;	/**< packed bit map of regions whose _markData._shouldMark is true */
 
 protected:
 public:
