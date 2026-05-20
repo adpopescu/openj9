@@ -73,15 +73,6 @@ MM_HeapRegionDescriptorVLHGC::initialize(MM_EnvironmentBase *env, MM_HeapRegionM
 	}
 
 	_markData._shouldMark = false;
-	/* Update the cache in CopyForwardScheme */
-	MM_GCExtensions *extensions = MM_GCExtensions::getExtensions(env);
-	MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)extensions->getGlobalCollector();
-	if (NULL != gc) {
-		MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
-		if (NULL != copyForwardScheme) {
-			copyForwardScheme->updateRegionShouldMarkCache(this, false);
-		}
-	}
 	_markData._noEvacuation = false;
 	_markData._dynamicMarkCost = 0;
 	_markData._overflowFlags = 0x0;
@@ -102,7 +93,7 @@ MM_HeapRegionDescriptorVLHGC::initialize(MM_EnvironmentBase *env, MM_HeapRegionM
 		return false;
 	}
 #endif /* defined (J9VM_GC_MODRON_COMPACTION) */
-
+	MM_GCExtensions *extensions = MM_GCExtensions::getExtensions(env);
 	/* add our unfinalized list to the global list (no locking - assumes single threaded initialization) */
 	_unfinalizedObjectList.setNextList(extensions->unfinalizedObjectLists);
 	_unfinalizedObjectList.setPreviousList(NULL);

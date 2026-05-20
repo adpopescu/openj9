@@ -166,8 +166,18 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 	MM_HeapRegionDescriptorVLHGC *region = NULL;
 	while (NULL != (region = regionIterator.nextRegion())) {
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
-		Assert_MM_false(region->_markData._shouldMark);
-		Assert_MM_false(region->_reclaimData._shouldReclaim);
+		
+		/* Clear evacuation mark and update cache */
+		region->_markData._shouldMark = false;
+		region->_reclaimData._shouldReclaim = false;
+		region->_markData._noEvacuation = false;
+		MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
+		if (NULL != gc) {
+			MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
+			if (NULL != copyForwardScheme) {
+				copyForwardScheme->updateRegionShouldMarkCache(region, false);
+			}
+		}
 		if (region->containsObjects()) {
 			bool regionHasCriticalRegions = (0 != region->_criticalRegionsInUse);
 			bool isSelectionForCopyForward = env->_cycleState->_shouldRunCopyForward;
@@ -180,14 +190,6 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 					/* on collection phase, mark all non-overflowed regions and those that RSCL is not being rebuilt */
 					/* sweep/compact flags are set in ReclaimDelegate */
 					region->_markData._shouldMark = true;
-					/* Update the cache in CopyForwardScheme */
-					MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
-					if (NULL != gc) {
-						MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
-						if (NULL != copyForwardScheme) {
-							copyForwardScheme->updateRegionShouldMarkCache(region, true);
-						}
-					}
 					region->_reclaimData._shouldReclaim = true;
 					region->_compactData._shouldCompact = false;
 					/* Collected regions are no longer target for defragmentation until next GMP */
@@ -230,14 +232,6 @@ MM_CollectionSetDelegate::selectRegionsForBudget(MM_EnvironmentVLHGC *env, UDATA
 		if(regionSelectionIndex >= regionSelectionThreshold) {
 			/* The region is to be selected as part of the dynamic set */
 			regionSelectionPtr->_markData._shouldMark = true;
-			/* Update the cache in CopyForwardScheme */
-			MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
-			if (NULL != gc) {
-				MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
-				if (NULL != copyForwardScheme) {
-					copyForwardScheme->updateRegionShouldMarkCache(regionSelectionPtr, true);
-				}
-			}
 			regionSelectionPtr->_reclaimData._shouldReclaim = true;
 			regionSelectionPtr->_compactData._shouldCompact = false;
 			/* Collected regions are no longer target for defragmentation until the next GMP */
@@ -473,27 +467,7 @@ MM_CollectionSetDelegate::createRegionCollectionSetForPartialGC(MM_EnvironmentVL
 void
 MM_CollectionSetDelegate::deleteRegionCollectionSetForPartialGC(MM_EnvironmentVLHGC *env)
 {
-	Assert_MM_true(MM_CycleState::CT_PARTIAL_GARBAGE_COLLECTION == env->_cycleState->_collectionType);
 
-	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager);
-	MM_HeapRegionDescriptorVLHGC *region = NULL;
-	while (NULL != (region = regionIterator.nextRegion())) {
-		/* there shouldn't be any regions that have some occupancy but not marked left if the increment is done */
-		Assert_MM_false(MM_HeapRegionDescriptor::ADDRESS_ORDERED == region->getRegionType());
-		Assert_MM_true(MM_RegionValidator(region).validate(env));
-
-		region->_markData._shouldMark = false;
-		/* Update the cache in CopyForwardScheme */
-		MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
-		if (NULL != gc) {
-			MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
-			if (NULL != copyForwardScheme) {
-				copyForwardScheme->updateRegionShouldMarkCache(region, false);
-			}
-		}
-		region->_reclaimData._shouldReclaim = false;
-		region->_markData._noEvacuation = false;
-	}
 }
 
 void
@@ -505,7 +479,8 @@ MM_CollectionSetDelegate::createRegionCollectionSetForGlobalGC(MM_EnvironmentVLH
 	MM_HeapRegionDescriptorVLHGC *region = NULL;
 	while (NULL != (region = regionIterator.nextRegion())) {
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
-		Assert_MM_false(region->_reclaimData._shouldReclaim);
+
+		region->_reclaimData._shouldReclaim = false;
 		if (region->containsObjects()) {
 			region->_reclaimData._shouldReclaim = true;
 			region->_compactData._shouldCompact = false;
@@ -516,17 +491,6 @@ MM_CollectionSetDelegate::createRegionCollectionSetForGlobalGC(MM_EnvironmentVLH
 void
 MM_CollectionSetDelegate::deleteRegionCollectionSetForGlobalGC(MM_EnvironmentVLHGC *env)
 {
-	Assert_MM_true(MM_CycleState::CT_GLOBAL_GARBAGE_COLLECTION == env->_cycleState->_collectionType);
-
-	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager);
-	MM_HeapRegionDescriptorVLHGC *region = NULL;
-	while (NULL != (region = regionIterator.nextRegion())) {
-		/* there shouldn't be any regions that have some occupancy but not marked left */
-		Assert_MM_false(MM_HeapRegionDescriptor::ADDRESS_ORDERED == region->getRegionType());
-		Assert_MM_true(MM_RegionValidator(region).validate(env));
-
-		region->_reclaimData._shouldReclaim = false;
-	}
 }
 
 MM_HeapRegionDescriptorVLHGC*
