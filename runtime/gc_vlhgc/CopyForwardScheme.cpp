@@ -787,11 +787,16 @@ MM_CopyForwardScheme::acquireEmptyRegion(MM_EnvironmentVLHGC *env, MM_ReservedRe
 		newRegion = allocationContext->collectorAcquireRegion(env);
 
 		if (NULL != newRegion) {
+			/* Clear collection set flags from previous cycle (on-demand cleanup) */
+			newRegion->_markData._shouldMark = false;
+			newRegion->_reclaimData._shouldReclaim = false;
+			newRegion->_markData._noEvacuation = false;
+			
 			MM_CycleState *cycleState = env->_cycleState;
 			MM_CycleState *externalCycleState = env->_cycleState->_externalCycleState;
 			
 			/* a new region starts as ADDRESS_ORDERED but we will always have valid mark map data for this region so set its type now */
-			newRegion->setMarkMapValid();		
+			newRegion->setMarkMapValid();
 			if (newRegion->_previousMarkMapCleared) {
 				newRegion->_previousMarkMapCleared = false;
 			} else {

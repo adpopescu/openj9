@@ -162,25 +162,15 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 	/* Calculate the core "required" collection set for the Partial GC, which constitutes all regions that are equal to
 	 * or below the nursery age.
 	 */
-	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager);
+	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager, MM_HeapRegionDescriptor::MANAGED);
 	MM_HeapRegionDescriptorVLHGC *region = NULL;
 	while (NULL != (region = regionIterator.nextRegion())) {
-		/* Clear collection set flags from previous cycle (lazy cleanup optimization) */
+		/* Clear collection set flags from previous cycle for regions not yet reused */
 		region->_markData._shouldMark = false;
 		region->_reclaimData._shouldReclaim = false;
 		region->_markData._noEvacuation = false;
 		
-		/* Only process MANAGED regions for collection set selection */
-		if (MM_HeapRegionDescriptor::MANAGED != region->getRegionType()) {
-			continue;
-		}
-		MM_IncrementalGenerationalGC *gc = (MM_IncrementalGenerationalGC *)_extensions->getGlobalCollector();
-		if (NULL != gc) {
-			MM_CopyForwardScheme *copyForwardScheme = gc->getCopyForwardDelegate()->getCopyForwardScheme();
-			if (NULL != copyForwardScheme) {
-				copyForwardScheme->updateRegionShouldMarkCache(region, false);
-			}
-		}
+		Assert_MM_true(MM_RegionValidator(region).validate(env));
 		if (region->containsObjects()) {
 			bool regionHasCriticalRegions = (0 != region->_criticalRegionsInUse);
 			bool isSelectionForCopyForward = env->_cycleState->_shouldRunCopyForward;
@@ -468,12 +458,6 @@ MM_CollectionSetDelegate::createRegionCollectionSetForPartialGC(MM_EnvironmentVL
 }
 
 void
-MM_CollectionSetDelegate::deleteRegionCollectionSetForPartialGC(MM_EnvironmentVLHGC *env)
-{
-
-}
-
-void
 MM_CollectionSetDelegate::createRegionCollectionSetForGlobalGC(MM_EnvironmentVLHGC *env)
 {
 	Assert_MM_true(MM_CycleState::CT_GLOBAL_GARBAGE_COLLECTION == env->_cycleState->_collectionType);
@@ -489,11 +473,6 @@ MM_CollectionSetDelegate::createRegionCollectionSetForGlobalGC(MM_EnvironmentVLH
 			region->_compactData._shouldCompact = false;
 		}
 	}
-}
-
-void
-MM_CollectionSetDelegate::deleteRegionCollectionSetForGlobalGC(MM_EnvironmentVLHGC *env)
-{
 }
 
 MM_HeapRegionDescriptorVLHGC*

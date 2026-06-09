@@ -237,12 +237,6 @@ MM_ReclaimDelegate::tagRegionsBeforeCompactWithWorkGoal(MM_EnvironmentVLHGC *env
 
 			if (isCopyForward) {
 				region->_markData._shouldMark = true;
-				/* Update the cache in CopyForwardScheme */
-				MM_IncrementalGenerationalGC *igc = (MM_IncrementalGenerationalGC *)MM_GCExtensions::getExtensions(env)->getGlobalCollector();
-				MM_CopyForwardScheme *copyForwardScheme = igc->getCopyForwardDelegate()->getCopyForwardScheme();
-				if (NULL != copyForwardScheme) {
-					copyForwardScheme->updateRegionShouldMarkCache(region, true);
-				}
 				region->_reclaimData._shouldReclaim = true;
 			} else {
 				Assert_MM_true(0 == region->_criticalRegionsInUse);
