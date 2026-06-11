@@ -87,6 +87,9 @@ MM_HeapRegionDescriptorVLHGC::initialize(MM_EnvironmentBase *env, MM_HeapRegionM
 	_copyForwardData._freshSurvivor = false;
 	_copyForwardData._nextRegion = NULL;
 	_copyForwardData._previousRegion = NULL;
+	
+	_dynamicSelectionNext = NULL;
+	_collectionSetNext = NULL;
 
 #if defined (J9VM_GC_MODRON_COMPACTION)
 	if (!_compactData.initialize((MM_EnvironmentVLHGC*)env, regionManager, this)) {

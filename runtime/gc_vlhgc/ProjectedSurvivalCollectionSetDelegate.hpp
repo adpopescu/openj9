@@ -132,6 +132,9 @@ private:
 
 	MM_HeapRegionDescriptorVLHGC **_dynamicSelectionRegionList;  /**< Pointer table used for sorting or iterating over regions */
 
+	MM_HeapRegionDescriptorVLHGC *_collectionSetHead;  /**< Head of linked list tracking regions in collection set */
+	UDATA _collectionSetCount;  /**< Number of regions in collection set tracking list */
+
 protected:
 public:
 
@@ -239,6 +242,13 @@ public:
 	 * @param env[in] The main GC thread
 	 */
 	void createRegionCollectionSetForGlobalGC(MM_EnvironmentVLHGC *env);
+
+	/**
+	 * Clear collection set flags for all regions that were in the collection set.
+	 * Uses the tracked collection set list for selective cleanup instead of iterating all regions.
+	 * @param env[in] The main GC thread
+	 */
+	void clearCollectionSetFlags(MM_EnvironmentVLHGC *env);
 
 	/**
 	 * Record pre-sweep region information in order to calculate rate of return on tracing for age groups.

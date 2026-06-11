@@ -130,6 +130,9 @@ private:
 
 	SetSelectionData *_setSelectionDataTable;  /**< Storage table for set selection statistics and variables (grouped by age) */
 	SetSelectionData **_dynamicSelectionList;  /**< Pointer table used for sorting or iterating over candidate dynamic selection elements */
+	
+	MM_HeapRegionDescriptorVLHGC *_collectionSetHead;  /**< Head of linked list tracking all regions in current collection set */
+	UDATA _collectionSetCount;  /**< Number of regions currently in the collection set */
 
 	/* Member Functions */
 public:
@@ -174,6 +177,13 @@ public:
 	 * Record post-sweep region information and calculate rate of return on tracing for age groups.
 	 */
 	void rateOfReturnCalculationAfterSweep(MM_EnvironmentVLHGC *env);
+	
+	/**
+	 * Clear collection set flags for all regions that were in the collection set.
+	 * This replaces the traditional "delete pass" by only clearing flags on tracked regions.
+	 * @param env[in] The main GC thread
+	 */
+	void clearCollectionSetFlags(MM_EnvironmentVLHGC *env);
 
 protected:
 

@@ -63,6 +63,8 @@ MM_CollectionSetDelegate::MM_CollectionSetDelegate(MM_EnvironmentBase *env, MM_H
 	, _regionManager(manager)
 	, _setSelectionDataTable(NULL)
 	, _dynamicSelectionList(NULL)
+	, _collectionSetHead(NULL)
+	, _collectionSetCount(0)
 {
 	_typeId = __FUNCTION__;
 }
@@ -165,11 +167,6 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager, MM_HeapRegionDescriptor::MANAGED);
 	MM_HeapRegionDescriptorVLHGC *region = NULL;
 	while (NULL != (region = regionIterator.nextRegion())) {
-		/* Clear collection set flags from previous cycle for regions not yet reused */
-		region->_markData._shouldMark = false;
-		region->_reclaimData._shouldReclaim = false;
-		region->_markData._noEvacuation = false;
-		
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
 		if (region->containsObjects()) {
 			bool regionHasCriticalRegions = (0 != region->_criticalRegionsInUse);
@@ -187,6 +184,12 @@ MM_CollectionSetDelegate::createNurseryCollectionSet(MM_EnvironmentVLHGC *env)
 					region->_compactData._shouldCompact = false;
 					/* Collected regions are no longer target for defragmentation until next GMP */
 					region->_defragmentationTarget = false;
+					
+					/* Add region to collection set tracking list */
+					region->setCollectionSetNext(_collectionSetHead);
+					_collectionSetHead = region;
+					_collectionSetCount += 1;
+					
 					_extensions->compactGroupPersistentStats[compactGroup]._regionsInRegionCollectionSetForPGC += 1;
 					nurseryRegionCount += 1;
 				} else {
@@ -229,6 +232,12 @@ MM_CollectionSetDelegate::selectRegionsForBudget(MM_EnvironmentVLHGC *env, UDATA
 			regionSelectionPtr->_compactData._shouldCompact = false;
 			/* Collected regions are no longer target for defragmentation until the next GMP */
 			regionSelectionPtr->_defragmentationTarget = false;
+			
+			/* Add region to collection set tracking list */
+			regionSelectionPtr->setCollectionSetNext(_collectionSetHead);
+			_collectionSetHead = regionSelectionPtr;
+			_collectionSetCount += 1;
+			
 			ageGroupBudgetRemaining -= 1;
 
 			UDATA tableIndex = _regionManager->mapDescriptorToRegionTableIndex(regionSelectionPtr);
@@ -674,4 +683,33 @@ MM_CollectionSetDelegate::rateOfReturnCalculationAfterSweep(MM_EnvironmentVLHGC 
 			}
 		}
 	}
+}
+
+void
+MM_CollectionSetDelegate::clearCollectionSetFlags(MM_EnvironmentVLHGC *env)
+{
+	MM_HeapRegionDescriptorVLHGC *region = _collectionSetHead;
+	UDATA clearedCount = 0;
+	
+	while (NULL != region) {
+		MM_HeapRegionDescriptorVLHGC *next = region->getCollectionSetNext();
+		
+		/* Clear collection set flags */
+		region->_markData._shouldMark = false;
+		region->_reclaimData._shouldReclaim = false;
+		region->_markData._noEvacuation = false;
+		
+		/* Clear the linked list pointer */
+		region->setCollectionSetNext(NULL);
+		
+		clearedCount++;
+		region = next;
+	}
+	
+	/* Verify we cleared the expected number of regions */
+	Assert_MM_true(clearedCount == _collectionSetCount);
+	
+	/* Reset tracking list */
+	_collectionSetHead = NULL;
+	_collectionSetCount = 0;
 }

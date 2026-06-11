@@ -99,6 +99,7 @@ private:
 	MM_RememberedSetCard *_rsclBufferPool;			 /**< RSCL Buffer pool owned by this region (Buffers can still be shared among other regions) */
 	
 	MM_HeapRegionDescriptorVLHGC *_dynamicSelectionNext;  /**< Linked list pointer used during dynamic set selection (NOTE: Valid only during dynamic set selection) */
+	MM_HeapRegionDescriptorVLHGC *_collectionSetNext;  /**< Linked list pointer for tracking collection set membership (NOTE: Valid from collection set creation until clearCollectionSetFlags) */
 
 	MM_UnfinalizedObjectList _unfinalizedObjectList; /**< A list of unfinalized objects in this region */
 	MM_ContinuationObjectList _continuationObjectList; /**< A list of continuation objects in this region */
@@ -232,6 +233,9 @@ public:
 	
 	MM_HeapRegionDescriptorVLHGC *getDynamicSelectionNext() { return _dynamicSelectionNext; }
 	void setDynamicSelectionNext(MM_HeapRegionDescriptorVLHGC *region) { _dynamicSelectionNext = region; }
+	
+	MM_HeapRegionDescriptorVLHGC *getCollectionSetNext() { return _collectionSetNext; }
+	void setCollectionSetNext(MM_HeapRegionDescriptorVLHGC *region) { _collectionSetNext = region; }
 
 	/**
 	 * Get the amount of bytes we expect to be reclaimed after a collection. i.e. bytes occupied - projected live bytes.

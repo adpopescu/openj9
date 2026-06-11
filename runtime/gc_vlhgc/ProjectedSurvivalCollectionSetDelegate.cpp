@@ -64,6 +64,8 @@ MM_ProjectedSurvivalCollectionSetDelegate::MM_ProjectedSurvivalCollectionSetDele
 	, _setSelectionDataTable(NULL)
 	, _dynamicSelectionList(NULL)
 	, _dynamicSelectionRegionList(NULL)
+	, _collectionSetHead(NULL)
+	, _collectionSetCount(0)
 {
 	_typeId = __FUNCTION__;
 }
@@ -176,11 +178,6 @@ MM_ProjectedSurvivalCollectionSetDelegate::createNurseryCollectionSet(MM_Environ
 	GC_HeapRegionIteratorVLHGC regionIterator(_regionManager, MM_HeapRegionDescriptor::MANAGED);
 	MM_HeapRegionDescriptorVLHGC *region = NULL;
 	while (NULL != (region = regionIterator.nextRegion())) {
-		/* Clear collection set flags from previous cycle for regions not yet reused */
-		region->_markData._shouldMark = false;
-		region->_reclaimData._shouldReclaim = false;
-		region->_markData._noEvacuation = false;
-		
 		Assert_MM_true(MM_RegionValidator(region).validate(env));
 		if (region->containsObjects()) {
 			bool regionHasCriticalRegions = (0 != region->_criticalRegionsInUse);
@@ -225,6 +222,11 @@ MM_ProjectedSurvivalCollectionSetDelegate::selectRegion(MM_EnvironmentVLHGC *env
 	region->_reclaimData._shouldReclaim = true;
 	region->_compactData._shouldCompact = false;
 	region->_defragmentationTarget = false;
+
+	/* Add region to collection set tracking list */
+	region->setCollectionSetNext(_collectionSetHead);
+	_collectionSetHead = region;
+	_collectionSetCount += 1;
 
 	_extensions->compactGroupPersistentStats[compactGroup]._regionsInRegionCollectionSetForPGC += 1;
 
@@ -674,4 +676,29 @@ MM_ProjectedSurvivalCollectionSetDelegate::rateOfReturnCalculationAfterSweep(MM_
 			}
 		}
 	}
+}
+
+void
+MM_ProjectedSurvivalCollectionSetDelegate::clearCollectionSetFlags(MM_EnvironmentVLHGC *env)
+{
+	UDATA clearedCount = 0;
+	MM_HeapRegionDescriptorVLHGC *region = _collectionSetHead;
+	while (NULL != region) {
+		MM_HeapRegionDescriptorVLHGC *next = region->getCollectionSetNext();
+		
+		/* Clear collection set flags */
+		region->_markData._shouldMark = false;
+		region->_reclaimData._shouldReclaim = false;
+		region->_markData._noEvacuation = false;
+
+		/* Clear the tracking pointer */
+		region->setCollectionSetNext(NULL);
+		
+		clearedCount += 1;
+		region = next;
+	}
+
+	/* Reset tracking list */
+	_collectionSetHead = NULL;
+	_collectionSetCount = 0;
 }
