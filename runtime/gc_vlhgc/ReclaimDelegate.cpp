@@ -278,13 +278,6 @@ MM_ReclaimDelegate::estimateReclaimableRegions(MM_EnvironmentVLHGC *env, double 
 		GC_HeapRegionIteratorVLHGC regionIterator(_regionManager, MM_HeapRegionDescriptor::MANAGED);
 		MM_HeapRegionDescriptorVLHGC *region = NULL;
 		while (NULL != (region = regionIterator.nextRegion())) {
-			/* Clear collection set flags from previous cycle (merged delete pass optimization).
-			 * This eliminates the need for a separate full-heap iteration just to clear flags.
-			 * Clearing flags on all regions is safe and idempotent. */
-			region->_markData._shouldMark = false;
-			region->_reclaimData._shouldReclaim = false;
-			region->_markData._noEvacuation = false;
-			
 			/* regions that are overflowed or RSCL is being rebuilt are not included into estimate */
 			if (region->hasValidMarkMap() && region->getRememberedSetCardList()->isAccurate()) {
 				MM_MemoryPool *memoryPool = region->getMemoryPool();

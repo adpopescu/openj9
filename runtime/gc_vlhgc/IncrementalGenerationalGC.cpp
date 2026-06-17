@@ -1557,6 +1557,13 @@ MM_IncrementalGenerationalGC::incrementRegionAges(MM_EnvironmentVLHGC *env, UDAT
 	_interRegionRememberedSet->setUnusedRegionThreshold(env, _schedulingDelegate.getDefragmentEmptinessThreshold(env));
 
 	while (NULL != (region = regionIterator.nextRegion())) {
+		/* Clear collection set flags from previous cycle (merged delete pass optimization).
+		 * This is safe here because all GC work is complete and no concurrent threads
+		 * are accessing these flags. Clearing on all regions is safe at this point. */
+		region->_markData._shouldMark = false;
+		region->_reclaimData._shouldReclaim = false;
+		region->_markData._noEvacuation = false;
+		
 		/* Adjust age for non-empty regions. */
 		if(region->containsObjects() || region->isArrayletLeaf()) {
 
