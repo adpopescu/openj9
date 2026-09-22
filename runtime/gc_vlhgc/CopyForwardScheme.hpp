@@ -653,6 +653,56 @@ private:
 	MMINLINE void scanObject(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, ScanReason reason);
 
 	/**
+	 * For fast traversal of deep structure nodes - scan objects with self referencing fields with priority
+	 * Split into two functions deepScan and deepScanOutline. Frequently called checks (see lazy start check) must be inlined
+	 * @param env The environment.
+	 * @param reservingContext The allocation context to reserve copy space.
+	 * @param objectPtr The pointer to the object.
+	 * @param priorityFieldOffset1 Offset to the first priority field of the object
+	 * @param priorityFieldOffset2 Offset to the second priority field, if it can't follow through in one direction,
+	 * it will attempt to use the second self referencing field
+	 */
+	MMINLINE void
+	deepScan(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2)
+	{
+		/**
+		 * Inhibit the special treatment routine with relatively high probability to skip over most
+		 * false positives (shorter lists), while only marginally delay detection of very deep structures.
+		 */
+		if (shouldStartDeepScan(env, objectPtr)) {
+			deepScanOutline(env, reservingContext, objectPtr, priorityFieldOffset1, priorityFieldOffset2);
+		}
+	}
+
+	/**
+	 * Deep scan lazy start check - condition used for gatekeeping
+	 * @param env The environment.
+	 * @param objectPtr The pointer to the object.
+	 * @return True If deep scan should start
+	 */
+	MMINLINE bool
+	shouldStartDeepScan(MM_EnvironmentVLHGC *env, J9Object *objectPtr)
+	{
+		if (_extensions->disableDeepScan) {
+			return false;
+		}
+		/*
+		 * Gate: fire with probability 1/deepScanGateDivisor (default 1/64).
+		 * Objects are 8-byte aligned so the low 3 bits are always zero; shift
+		 * the divisor left by 3 to build the address mask from bits 3 upward.
+		 * deepScanGateDivisor must be a power of 2 >= 2.
+		 * Examples:
+		 *   divisor=16  → mask=0x078  (1/16  of objects)
+		 *   divisor=64  → mask=0x1F8  (1/64  of objects, default)
+		 *   divisor=256 → mask=0x7F8  (1/256 of objects)
+		 */
+		uintptr_t mask = (_extensions->deepScanGateDivisor - 1) << 3;
+		return (0 == ((uintptr_t)objectPtr & mask));
+	}
+
+	void deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2);
+
+	/**
 	 * Update scan for abort phase (workstack phase)
 	 * @param env[in] the current thread
 	 * @param objectPtr[in] current object being scanned.

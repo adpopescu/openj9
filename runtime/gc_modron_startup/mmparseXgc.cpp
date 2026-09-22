@@ -281,6 +281,54 @@ j9gc_initialize_parse_gc_colon(J9JavaVM *javaVM, char **scan_start)
 		goto _exit;
 	}
 
+	if (try_scan(scan_start, "disableDeepScan")) {
+		extensions->disableDeepScan = true;
+		goto _exit;
+	}
+
+	if (try_scan(scan_start, "deepScanGateDivisor=")) {
+		UDATA value = 0;
+		if (!scan_udata_helper(javaVM, scan_start, &value, "deepScanGateDivisor=")) {
+			goto _error;
+		}
+		/* Must be a power of 2 >= 2; silently clamp to 2 if zero or one is given */
+		if (value < 2) {
+			value = 2;
+		}
+		extensions->deepScanGateDivisor = value;
+		goto _exit;
+	}
+
+	if (try_scan(scan_start, "deepScanThrottleNum=")) {
+		UDATA value = 0;
+		if (!scan_udata_helper(javaVM, scan_start, &value, "deepScanThrottleNum=")) {
+			goto _error;
+		}
+		/* 0 is treated as 1 to prevent division producing zero budget */
+		extensions->deepScanThrottleNum = (0 == value) ? 1 : value;
+		goto _exit;
+	}
+
+	if (try_scan(scan_start, "deepScanThrottleDen=")) {
+		UDATA value = 0;
+		if (!scan_udata_helper(javaVM, scan_start, &value, "deepScanThrottleDen=")) {
+			goto _error;
+		}
+		/* 0 means unlimited — preserved as 0 for the UDATA_MAX path in deepScanOutline */
+		extensions->deepScanThrottleDen = value;
+		goto _exit;
+	}
+
+	if (try_scan(scan_start, "deepScanMaxNodes=")) {
+		UDATA value = 0;
+		if (!scan_udata_helper(javaVM, scan_start, &value, "deepScanMaxNodes=")) {
+			goto _error;
+		}
+		/* 0 means unlimited — map to UDATA_MAX for the loop check */
+		extensions->deepScanMaxNodes = (0 == value) ? UDATA_MAX : value;
+		goto _exit;
+	}
+
 	if (try_scan(scan_start, "concurrentKickoffTenuringHeadroom=")) {
 		UDATA value = 0;
 		if (!scan_udata_helper(javaVM, scan_start, &value, "concurrentKickoffTenuringHeadroom=")) {

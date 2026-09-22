@@ -375,9 +375,9 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 	uint64_t copyForwardTotalTime;
 	PORT_ACCESS_FROM_VMC(vmThread);
 
-	tgcExtensions->printf("CP-FW:  total           | rem-set | copy                                                             | mark\n");
-	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | stall   acquire   release   exchange   split\n");
-	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   |  (ms)   packets   packets   packets    arrays\n");
+	tgcExtensions->printf("CP-FW:  total           | rem-set | copy                                                             | deep scan                | mark\n");
+	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth  | stall   acquire   release   exchange   split\n");
+	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max    |  (ms)   packets   packets   packets    arrays\n");
 
 	MM_CopyForwardStats *copyForwardStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
 	copyForwardTotalTime = copyForwardStats->_endTime - copyForwardStats->_startTime;
@@ -389,7 +389,7 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 		if ((walkThread == vmThread) || (env->getThreadType() == GC_WORKER_THREAD)) {
 			if (env->_copyForwardStats._gcCount == MM_GCExtensions::getExtensions(env)->globalVLHGCStats.gcCount) {
 				uint64_t totalStallTime = env->_copyForwardStats.getStallTime() + env->_workPacketStats.getStallTime();
-				tgcExtensions->printf("%4zu:   %5llu   %5llu     %5llu     %5llu    %5zu     %5zu     %5zu     %5zu    %5zu    %5llu     %5llu    %5zu     %5zu     %5zu     %5zu\n",
+				tgcExtensions->printf("%4zu:   %5llu   %5llu     %5llu     %5llu    %5zu     %5zu     %5zu     %5zu    %5zu    %5llu     ",
 					env->getWorkerID(),
 					j9time_hires_delta(0, copyForwardTotalTime - totalStallTime, J9PORT_TIME_DELTA_IN_MILLISECONDS),
 					j9time_hires_delta(0, totalStallTime, J9PORT_TIME_DELTA_IN_MILLISECONDS),
@@ -400,7 +400,11 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					env->_copyForwardStats._acquireScanListCount,
 					env->_copyForwardStats._releaseScanListCount,
 					env->_copyForwardStats._copiedArraysSplit,
-					j9time_hires_delta(0, env->_copyForwardStats._abortStallTime, J9PORT_TIME_DELTA_IN_MILLISECONDS),
+					j9time_hires_delta(0, env->_copyForwardStats._abortStallTime, J9PORT_TIME_DELTA_IN_MILLISECONDS));
+				tgcExtensions->printf("%6zu   %6zu   %6zu    %5llu    %5zu     %5zu     %5zu     %5zu\n",
+					env->_copyForwardStats._totalDeepStructures,
+					env->_copyForwardStats._totalObjsDeepScanned,
+					env->_copyForwardStats._depthDeepestStructure,
 					j9time_hires_delta(0, env->_copyForwardStats._markStallTime + env->_workPacketStats.getStallTime(), J9PORT_TIME_DELTA_IN_MILLISECONDS),
 					env->_workPacketStats.workPacketsAcquired,
 					env->_workPacketStats.workPacketsReleased,

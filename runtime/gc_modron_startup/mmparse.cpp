@@ -964,6 +964,10 @@ gcParseSovereignArguments(J9JavaVM *vm)
 		extensions->disableExplicitGC = (index != 0);
 	}
 
+	if (-1 != option_set(vm, "-Xgc:disableDeepScan", EXACT_MATCH)) {
+		extensions->disableDeepScan = true;
+	}
+
 #if defined(J9VM_GC_MODRON_COMPACTION)
 	/* These arguments aren't done as mutual exclusive pairs because their effects are not opposites */
 	if (-1 != option_set(vm, "-Xnocompactexplicitgc", EXACT_MATCH)) {
