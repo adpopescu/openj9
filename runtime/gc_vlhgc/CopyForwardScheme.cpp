@@ -2169,6 +2169,9 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	 * deep scan attempts this cycle.
 	 */
 	if (env->_copyForwardStats._deepScanSuppressed) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		env->_copyForwardStats._deepScanSkipSuppressed += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 		return;
 	}
 
@@ -2182,10 +2185,13 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	 * and the 8 threads doing this work cause ~25s of unnecessary copying on a
 	 * packed-heap first cycle.
 	 */
-	{
+	if (isObjectInEvacuateMemory(objectPtr)) {
 		MM_HeapRegionDescriptorVLHGC *region =
 			(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(objectPtr);
-		if (region->_markData._noEvacuation) {
+		if (NULL != region && region->_markData._noEvacuation) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanSkipNoEvacuation += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			return;
 		}
 	}
@@ -2238,7 +2244,7 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	do {
 		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + priorityField));
 		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
-		if ((NULL == targetObj) || !isObjectInEvacuateMemory(targetObj)) {
+		if ((NULL == targetObj) || ((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop) || !isObjectInEvacuateMemory(targetObj)) {
 			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
 				break;
 			}
@@ -2276,12 +2282,18 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		/* Hard node cap: stop regardless of cache pressure once the per-invocation
 		 * node limit is reached.  deepScanMaxNodes=UDATA_MAX (default) disables this. */
 		if (nodesWalked >= maxNodes) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanExitThrottle += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			break;
 		}
 
 		/* Throttle: stop if this thread has fed more scan caches to the shared list
 		 * than its fair share, so other threads can pick up work instead of stalling. */
 		if ((env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart) > scanCacheThrottle) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanExitThrottle += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			break;
 		}
 

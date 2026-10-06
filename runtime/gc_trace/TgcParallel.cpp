@@ -375,9 +375,9 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 	uint64_t copyForwardTotalTime;
 	PORT_ACCESS_FROM_VMC(vmThread);
 
-	tgcExtensions->printf("CP-FW:  total           | rem-set | copy                                                             | deep scan                | mark\n");
-	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth  | stall   acquire   release   exchange   split\n");
-	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max    |  (ms)   packets   packets   packets    arrays\n");
+	tgcExtensions->printf("CP-FW:  total           | rem-set | copy                                                             | deep scan                                                      | mark\n");
+	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth   skipGate  skipSup  skipNoE  exitThr  | stall   acquire   release   exchange   split\n");
+	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max     (1/N)     (suppr)  (noEvac) (thrott) |  (ms)   packets   packets   packets    arrays\n");
 
 	MM_CopyForwardStats *copyForwardStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
 	copyForwardTotalTime = copyForwardStats->_endTime - copyForwardStats->_startTime;
@@ -401,10 +401,14 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					env->_copyForwardStats._releaseScanListCount,
 					env->_copyForwardStats._copiedArraysSplit,
 					j9time_hires_delta(0, env->_copyForwardStats._abortStallTime, J9PORT_TIME_DELTA_IN_MILLISECONDS));
-				tgcExtensions->printf("%6zu   %6zu   %6zu    %5llu    %5zu     %5zu     %5zu     %5zu\n",
+				tgcExtensions->printf("%6zu   %6zu   %6zu   %7zu  %7zu  %7zu  %7zu    %5llu    %5zu     %5zu     %5zu     %5zu\n",
 					env->_copyForwardStats._totalDeepStructures,
 					env->_copyForwardStats._totalObjsDeepScanned,
 					env->_copyForwardStats._depthDeepestStructure,
+					env->_copyForwardStats._deepScanSkipGate,
+					env->_copyForwardStats._deepScanSkipSuppressed,
+					env->_copyForwardStats._deepScanSkipNoEvacuation,
+					env->_copyForwardStats._deepScanExitThrottle,
 					j9time_hires_delta(0, env->_copyForwardStats._markStallTime + env->_workPacketStats.getStallTime(), J9PORT_TIME_DELTA_IN_MILLISECONDS),
 					env->_workPacketStats.workPacketsAcquired,
 					env->_workPacketStats.workPacketsReleased,

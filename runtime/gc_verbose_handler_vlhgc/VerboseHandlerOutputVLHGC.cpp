@@ -450,6 +450,15 @@ MM_VerboseHandlerOutputVLHGC::handleCopyForwardEnd(J9HookInterface** hook, UDATA
 				(copyForwardStats->_edenEvacuateRegionCount + copyForwardStats->_nonEdenEvacuateRegionCount - copyForwardStats->_nonEvacuateRegionCount),
 				copyForwardStats->_nonEvacuateRegionCount);
 	}
+	writer->formatAndOutput(env, 1, "<deep-scan structures=\"%zu\" objects=\"%zu\" depth=\"%zu\" skipGate=\"%zu\" skipSuppressed=\"%zu\" skipNoEvacuation=\"%zu\" exitThrottle=\"%zu\" />",
+			copyForwardStats->_totalDeepStructures,
+			copyForwardStats->_totalObjsDeepScanned,
+			copyForwardStats->_depthDeepestStructure,
+			copyForwardStats->_deepScanSkipGate,
+			copyForwardStats->_deepScanSkipSuppressed,
+			copyForwardStats->_deepScanSkipNoEvacuation,
+			copyForwardStats->_deepScanExitThrottle);
+
 	outputRememberedSetClearedInfo(env, irrsStats);
 
 #if defined(J9VM_GC_SPARSE_HEAP_ALLOCATION)

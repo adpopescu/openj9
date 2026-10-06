@@ -684,6 +684,9 @@ private:
 	shouldStartDeepScan(MM_EnvironmentVLHGC *env, J9Object *objectPtr)
 	{
 		if (_extensions->disableDeepScan) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanSkipGate += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			return false;
 		}
 		/*
@@ -697,7 +700,13 @@ private:
 		 *   divisor=256 → mask=0x7F8  (1/256 of objects)
 		 */
 		uintptr_t mask = (_extensions->deepScanGateDivisor - 1) << 3;
-		return (0 == ((uintptr_t)objectPtr & mask));
+		if (0 != ((uintptr_t)objectPtr & mask)) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanSkipGate += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+			return false;
+		}
+		return true;
 	}
 
 	void deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2);
