@@ -450,14 +450,17 @@ MM_VerboseHandlerOutputVLHGC::handleCopyForwardEnd(J9HookInterface** hook, UDATA
 				(copyForwardStats->_edenEvacuateRegionCount + copyForwardStats->_nonEdenEvacuateRegionCount - copyForwardStats->_nonEvacuateRegionCount),
 				copyForwardStats->_nonEvacuateRegionCount);
 	}
-	writer->formatAndOutput(env, 1, "<deep-scan structures=\"%zu\" objects=\"%zu\" depth=\"%zu\" skipGate=\"%zu\" skipSuppressed=\"%zu\" skipNoEvacuation=\"%zu\" exitThrottle=\"%zu\" />",
+	writer->formatAndOutput(env, 1, "<deep-scan structures=\"%zu\" objects=\"%zu\" depth=\"%zu\" skipGate=\"%zu\" skipSuppressed=\"%zu\" skipNoEvacuation=\"%zu\" exitThrottle=\"%zu\" exitNotInEvacuate=\"%zu\" exitForwarded=\"%zu\" dsCache=\"%zu\" />",
 			copyForwardStats->_totalDeepStructures,
 			copyForwardStats->_totalObjsDeepScanned,
 			copyForwardStats->_depthDeepestStructure,
 			copyForwardStats->_deepScanSkipGate,
 			copyForwardStats->_deepScanSkipSuppressed,
 			copyForwardStats->_deepScanSkipNoEvacuation,
-			copyForwardStats->_deepScanExitThrottle);
+			copyForwardStats->_deepScanExitThrottle,
+			copyForwardStats->_deepScanExitNotInEvacuate,
+			copyForwardStats->_deepScanExitForwarded,
+			copyForwardStats->_deepScanCachesReleased);
 
 	outputRememberedSetClearedInfo(env, irrsStats);
 

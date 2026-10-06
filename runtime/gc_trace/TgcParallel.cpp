@@ -378,6 +378,7 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 	tgcExtensions->printf("CP-FW:  total           | rem-set | copy                                                             | deep scan                                                      | mark\n");
 	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth   skipGate  skipSup  skipNoE  exitThr  | stall   acquire   release   exchange   split\n");
 	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max     (1/N)     (suppr)  (noEvac) (thrott) |  (ms)   packets   packets   packets    arrays\n");
+	tgcExtensions->printf("                                                                                                     | (exitNotInEvac)  (exitFwd)  (dsCache)\n");
 
 	MM_CopyForwardStats *copyForwardStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
 	copyForwardTotalTime = copyForwardStats->_endTime - copyForwardStats->_startTime;
@@ -414,6 +415,10 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					env->_workPacketStats.workPacketsReleased,
 					env->_workPacketStats.workPacketsExchanged,
 					env->_copyForwardStats._markedArraysSplit);
+				tgcExtensions->printf("                                                                                                       %7zu  %7zu  %7zu\n",
+					env->_copyForwardStats._deepScanExitNotInEvacuate,
+					env->_copyForwardStats._deepScanExitForwarded,
+					env->_copyForwardStats._deepScanCachesReleased);
 			}
 		}
 	}

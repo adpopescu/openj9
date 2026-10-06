@@ -2245,6 +2245,9 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + priorityField));
 		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
 		if ((NULL == targetObj) || ((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop) || !isObjectInEvacuateMemory(targetObj)) {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanExitNotInEvacuate += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
 				break;
 			}
@@ -2255,6 +2258,9 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		MM_ForwardedHeader forwardHeader(targetObj, compressed);
 		if (forwardHeader.isForwardedPointer()) {
 			/* Object already copied/forwarded - cannot continue deep scan further along this branch */
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+			env->_copyForwardStats._deepScanExitForwarded += 1;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
 				break;
 			}
@@ -2305,6 +2311,8 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	if (objDeepScanned > env->_copyForwardStats._depthDeepestStructure) {
 		env->_copyForwardStats._depthDeepestStructure = objDeepScanned;
 	}
+	env->_copyForwardStats._deepScanCachesReleased +=
+		(env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart);
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
