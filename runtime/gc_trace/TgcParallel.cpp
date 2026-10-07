@@ -380,7 +380,11 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth   skipGate  skipSup  skipNoE  exitThr  | stall   acquire   release   exchange   split\n");
 	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max     (1/N)     (suppr)  (noEvac) (thrott) |  (ms)   packets   packets   packets    arrays\n");
 	tgcExtensions->printf("                                                                                                     | (exitNotInEvac)  (exitFwd)  (dsCache)\n");
+	tgcExtensions->printf("                                                                                                     | hop hit/miss: hit(green) missSameAge(yellow) missDiffAge(red)\n");
+	tgcExtensions->printf("                                                                                                     | per-src-age: hit[0..24] missSame[0..24] missDiff[0..24]\n");
 	tgcExtensions->printf("                                                                                                     | exitNotInEvacuate age histogram (age0 .. age24):\n");
+	tgcExtensions->printf("                                                                                                     | exitNotInEvacuate src-age histogram (age0 .. age24):\n");
+	tgcExtensions->printf("                                                                                                     | exitNotInEvacuate transition matrix [src][tgt] (age0 .. age24):\n");
 
 	MM_CopyForwardStats *copyForwardStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
 	copyForwardTotalTime = copyForwardStats->_endTime - copyForwardStats->_startTime;
@@ -421,13 +425,67 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					env->_copyForwardStats._deepScanExitNotInEvacuate,
 					env->_copyForwardStats._deepScanExitForwarded,
 					env->_copyForwardStats._deepScanCachesReleased);
-				/* Age histogram — print all 25 buckets on one line as space-separated counts */
+				tgcExtensions->printf("                                                                                                       exit-breakdown: null=%zu outOfHeap=%zu notInCS=%zu\n",
+					env->_copyForwardStats._deepScanExitNull,
+					env->_copyForwardStats._deepScanExitOutOfHeap,
+					env->_copyForwardStats._deepScanExitNotInCS);
+				/* Target age histogram — all 25 buckets on one space-separated line */
 				tgcExtensions->printf("                                                                                                       age[");
 				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
 					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanExitNotInEvacuateByAge[i]);
 					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) {
 						tgcExtensions->printf(" ");
 					}
+				}
+				tgcExtensions->printf("]\n");
+				/* Source age histogram — all 25 buckets on one space-separated line */
+				tgcExtensions->printf("                                                                                                       src[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanExitNotInEvacuateSrcByAge[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) {
+						tgcExtensions->printf(" ");
+					}
+				}
+				tgcExtensions->printf("]\n");
+				/* Transition matrix — one row per source age */
+				for (uintptr_t s = 0; s < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; s++) {
+					tgcExtensions->printf("                                                                                                       matrix[%2zu][", s);
+					for (uintptr_t t = 0; t < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; t++) {
+						tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanExitNotInEvacuateMatrix[s][t]);
+						if (t + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) {
+							tgcExtensions->printf(" ");
+						}
+					}
+					tgcExtensions->printf("]\n");
+				}
+				/* Three-way hop classification summary */
+				uintptr_t totalHops = env->_copyForwardStats._deepScanHit
+					+ env->_copyForwardStats._deepScanMissSameAge
+					+ env->_copyForwardStats._deepScanMissDiffAge;
+				tgcExtensions->printf("                                                                                                       hop-ratio: hit=%zu missSame=%zu missDiff=%zu total=%zu\n",
+					env->_copyForwardStats._deepScanHit,
+					env->_copyForwardStats._deepScanMissSameAge,
+					env->_copyForwardStats._deepScanMissDiffAge,
+					totalHops);
+				/* Per-src-age hit histogram */
+				tgcExtensions->printf("                                                                                                       hit[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanHitByAge[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) tgcExtensions->printf(" ");
+				}
+				tgcExtensions->printf("]\n");
+				/* Per-src-age miss-same histogram */
+				tgcExtensions->printf("                                                                                                       mSame[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanMissSameAgeByAge[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) tgcExtensions->printf(" ");
+				}
+				tgcExtensions->printf("]\n");
+				/* Per-src-age miss-diff histogram */
+				tgcExtensions->printf("                                                                                                       mDiff[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanMissDiffAgeByAge[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) tgcExtensions->printf(" ");
 				}
 				tgcExtensions->printf("]\n");
 			}

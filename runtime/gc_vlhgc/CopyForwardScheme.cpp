@@ -2246,16 +2246,44 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
 		if ((NULL == targetObj) || ((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop) || !isObjectInEvacuateMemory(targetObj)) {
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-			env->_copyForwardStats._deepScanExitNotInEvacuate += 1;
-			if ((NULL != targetObj) && ((uintptr_t)targetObj >= (uintptr_t)_heapBase) && ((uintptr_t)targetObj < (uintptr_t)_heapTop)) {
+			/* Split the four-way condition into three precise counters, then update the legacy total.
+			 * exitNull counts only true dead-ends: NULL on field2, or NULL on field1 when there is no field2.
+			 * NULL on field1 when field2 exists is a retry, not a dead-end — do not count it here. */
+			if (NULL == targetObj) {
+				if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
+					env->_copyForwardStats._deepScanExitNull += 1;
+				}
+				/* else: field1 was null but field2 exists — will retry, no count */
+			} else if (((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop)) {
+				env->_copyForwardStats._deepScanExitOutOfHeap += 1;
+			} else {
+				/* In-heap but not in collection set */
+				env->_copyForwardStats._deepScanExitNotInCS += 1;
 				MM_HeapRegionDescriptorVLHGC *targetRegion =
 					(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(targetObj);
+				MM_HeapRegionDescriptorVLHGC *srcRegion =
+					(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(currentDeepObj);
 				if (NULL != targetRegion) {
 					uintptr_t age = OMR_MIN(targetRegion->getAge(),
 						MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS - 1);
 					env->_copyForwardStats._deepScanExitNotInEvacuateByAge[age] += 1;
+					if (NULL != srcRegion) {
+						uintptr_t srcAge = OMR_MIN(srcRegion->getAge(),
+							MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS - 1);
+						env->_copyForwardStats._deepScanExitNotInEvacuateSrcByAge[srcAge] += 1;
+						env->_copyForwardStats._deepScanExitNotInEvacuateMatrix[srcAge][age] += 1;
+						/* Three-way hop classification */
+						if (srcAge == age) {
+							env->_copyForwardStats._deepScanMissSameAge += 1;
+							env->_copyForwardStats._deepScanMissSameAgeByAge[srcAge] += 1;
+						} else {
+							env->_copyForwardStats._deepScanMissDiffAge += 1;
+							env->_copyForwardStats._deepScanMissDiffAgeByAge[srcAge] += 1;
+						}
+					}
 				}
 			}
+			env->_copyForwardStats._deepScanExitNotInEvacuate += 1; /* legacy total */
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
 				break;
@@ -2277,6 +2305,19 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 			continue;
 		}
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		/* Green hit: targetObj IS in the evacuate set — walk is about to continue */
+		{
+			MM_HeapRegionDescriptorVLHGC *srcRegion =
+				(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(currentDeepObj);
+			if (NULL != srcRegion) {
+				uintptr_t srcAge = OMR_MIN(srcRegion->getAge(),
+					MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS - 1);
+				env->_copyForwardStats._deepScanHit += 1;
+				env->_copyForwardStats._deepScanHitByAge[srcAge] += 1;
+			}
+		}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 		bool success = copyAndForward(env, reservingContext, currentDeepObj, &prioritySlot);
 		if (!success) {
 			/* First copy failure means no survivor space is available.

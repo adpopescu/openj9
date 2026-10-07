@@ -450,7 +450,7 @@ MM_VerboseHandlerOutputVLHGC::handleCopyForwardEnd(J9HookInterface** hook, UDATA
 				(copyForwardStats->_edenEvacuateRegionCount + copyForwardStats->_nonEdenEvacuateRegionCount - copyForwardStats->_nonEvacuateRegionCount),
 				copyForwardStats->_nonEvacuateRegionCount);
 	}
-	writer->formatAndOutput(env, 1, "<deep-scan structures=\"%zu\" objects=\"%zu\" depth=\"%zu\" skipGate=\"%zu\" skipSuppressed=\"%zu\" skipNoEvacuation=\"%zu\" exitThrottle=\"%zu\" exitNotInEvacuate=\"%zu\" exitForwarded=\"%zu\" dsCache=\"%zu\">",
+	writer->formatAndOutput(env, 1, "<deep-scan structures=\"%zu\" objects=\"%zu\" depth=\"%zu\" skipGate=\"%zu\" skipSuppressed=\"%zu\" skipNoEvacuation=\"%zu\" exitThrottle=\"%zu\" exitNotInEvacuate=\"%zu\" exitNull=\"%zu\" exitOutOfHeap=\"%zu\" exitNotInCS=\"%zu\" exitForwarded=\"%zu\" dsCache=\"%zu\" hit=\"%zu\" missSameAge=\"%zu\" missDiffAge=\"%zu\">",
 			copyForwardStats->_totalDeepStructures,
 			copyForwardStats->_totalObjsDeepScanned,
 			copyForwardStats->_depthDeepestStructure,
@@ -459,14 +459,35 @@ MM_VerboseHandlerOutputVLHGC::handleCopyForwardEnd(J9HookInterface** hook, UDATA
 			copyForwardStats->_deepScanSkipNoEvacuation,
 			copyForwardStats->_deepScanExitThrottle,
 			copyForwardStats->_deepScanExitNotInEvacuate,
+			copyForwardStats->_deepScanExitNull,
+			copyForwardStats->_deepScanExitOutOfHeap,
+			copyForwardStats->_deepScanExitNotInCS,
 			copyForwardStats->_deepScanExitForwarded,
-			copyForwardStats->_deepScanCachesReleased);
-	/* Emit one <age> element per bucket — only emit if any exits were recorded this cycle
-	 * to keep verbosegc output compact on runs without deep scan activity. */
+			copyForwardStats->_deepScanCachesReleased,
+			copyForwardStats->_deepScanHit,
+			copyForwardStats->_deepScanMissSameAge,
+			copyForwardStats->_deepScanMissDiffAge);
+	/* Emit per-age child elements — only when exits were recorded this cycle */
 	if (copyForwardStats->_deepScanExitNotInEvacuate > 0) {
 		for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
 			writer->formatAndOutput(env, 2, "<age value=\"%zu\" count=\"%zu\" />",
 					i, copyForwardStats->_deepScanExitNotInEvacuateByAge[i]);
+		}
+		for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+			writer->formatAndOutput(env, 2, "<src-age value=\"%zu\" count=\"%zu\" />",
+					i, copyForwardStats->_deepScanExitNotInEvacuateSrcByAge[i]);
+		}
+		for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+			writer->formatAndOutput(env, 2, "<hop-hit value=\"%zu\" count=\"%zu\" />",
+					i, copyForwardStats->_deepScanHitByAge[i]);
+		}
+		for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+			writer->formatAndOutput(env, 2, "<hop-miss-same value=\"%zu\" count=\"%zu\" />",
+					i, copyForwardStats->_deepScanMissSameAgeByAge[i]);
+		}
+		for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+			writer->formatAndOutput(env, 2, "<hop-miss-diff value=\"%zu\" count=\"%zu\" />",
+					i, copyForwardStats->_deepScanMissDiffAgeByAge[i]);
 		}
 	}
 	writer->formatAndOutput(env, 1, "</deep-scan>");
