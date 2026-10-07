@@ -28,6 +28,7 @@
 #include "ModronAssertions.h"
 
 #if defined(J9VM_GC_VLHGC)
+#include "CopyForwardStatsCore.hpp"
 #include "CycleStateVLHGC.hpp"
 #endif /* J9VM_GC_VLHGC */
 #include "EnvironmentVLHGC.hpp"
@@ -379,6 +380,7 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 	tgcExtensions->printf("        busy    stall   | stall   | stall   acquire   release   acquire   release    split terminate | struct  objects   depth   skipGate  skipSup  skipNoE  exitThr  | stall   acquire   release   exchange   split\n");
 	tgcExtensions->printf("         (ms)    (ms)   |  (ms)   |  (ms)   freelist  freelist  scanlist  scanlist   arrays   (ms)   | count   scanned   max     (1/N)     (suppr)  (noEvac) (thrott) |  (ms)   packets   packets   packets    arrays\n");
 	tgcExtensions->printf("                                                                                                     | (exitNotInEvac)  (exitFwd)  (dsCache)\n");
+	tgcExtensions->printf("                                                                                                     | exitNotInEvacuate age histogram (age0 .. age24):\n");
 
 	MM_CopyForwardStats *copyForwardStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
 	copyForwardTotalTime = copyForwardStats->_endTime - copyForwardStats->_startTime;
@@ -419,6 +421,15 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					env->_copyForwardStats._deepScanExitNotInEvacuate,
 					env->_copyForwardStats._deepScanExitForwarded,
 					env->_copyForwardStats._deepScanCachesReleased);
+				/* Age histogram — print all 25 buckets on one line as space-separated counts */
+				tgcExtensions->printf("                                                                                                       age[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanExitNotInEvacuateByAge[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) {
+						tgcExtensions->printf(" ");
+					}
+				}
+				tgcExtensions->printf("]\n");
 			}
 		}
 	}

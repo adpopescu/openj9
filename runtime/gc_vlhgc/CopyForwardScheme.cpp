@@ -2247,6 +2247,15 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		if ((NULL == targetObj) || ((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop) || !isObjectInEvacuateMemory(targetObj)) {
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			env->_copyForwardStats._deepScanExitNotInEvacuate += 1;
+			if ((NULL != targetObj) && ((uintptr_t)targetObj >= (uintptr_t)_heapBase) && ((uintptr_t)targetObj < (uintptr_t)_heapTop)) {
+				MM_HeapRegionDescriptorVLHGC *targetRegion =
+					(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(targetObj);
+				if (NULL != targetRegion) {
+					uintptr_t age = OMR_MIN(targetRegion->getAge(),
+						MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS - 1);
+					env->_copyForwardStats._deepScanExitNotInEvacuateByAge[age] += 1;
+				}
+			}
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
 				break;
