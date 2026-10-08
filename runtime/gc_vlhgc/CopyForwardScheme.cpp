@@ -2196,28 +2196,15 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		}
 	}
 
-	J9Object *currentDeepObj = objectPtr;
-	uintptr_t priorityField = priorityFieldOffset1;
-	bool const compressed = _extensions->compressObjectReferences();
-
 	/*
-	 * Throttle: mirror GenCon's free-list utilisation check.
-	 * Stop deep scan when this thread has released more scan caches to the shared
-	 * scan list than its fair share of the total pool (total / threadCount).
-	 * This prevents one thread from monopolising the scan pipeline while sibling
-	 * threads stall waiting for work.
+	 * Throttle parameters: computed once here and shared across both branch passes.
 	 *
 	 * Region-size normalisation: at larger heap sizes Balanced uses larger regions
 	 * (e.g. 2 MB at 2 GB vs 1 MB at 512 MB).  getTotalCacheCount() grows with the
-	 * number of regions, so the raw per-thread budget doubles at 2 GB, allowing each
-	 * deepScanOutline() call to follow chains twice as far before breaking out.
-	 * Normalise by dividing by (regionSize / 1 MB) so the effective budget is always
-	 * anchored to the 512 MB / 1 MB baseline regardless of heap or region size.
-	 */
-	uintptr_t threadCount = _extensions->dispatcher->threadCountMaximum();
-	uintptr_t regionSize = _regionManager->getRegionSize();
-	uintptr_t regionSizeMB = OMR_MAX(regionSize / (1024 * 1024), (uintptr_t)1);
-	/*
+	 * number of regions, so the raw per-thread budget doubles at 2 GB.  Normalise by
+	 * dividing by (regionSize / 1 MB) so the budget is always anchored to the
+	 * 512 MB / 1 MB baseline regardless of heap or region size.
+	 *
 	 * Cache-release budget = (totalCacheCount * deepScanThrottleNum) / (throttleDivisor * deepScanThrottleDen)
 	 *
 	 *   num=1, den=1 → baseline (default)
@@ -2226,34 +2213,97 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	 *   num=1, den=2 → budget halved   → exit sooner
 	 *   den=0        → unlimited (maps to UDATA_MAX; use only for testing)
 	 */
+	uintptr_t threadCount = _extensions->dispatcher->threadCountMaximum();
+	uintptr_t regionSize = _regionManager->getRegionSize();
+	uintptr_t regionSizeMB = OMR_MAX(regionSize / (1024 * 1024), (uintptr_t)1);
 	uintptr_t throttleDivisor = OMR_MAX(threadCount * regionSizeMB, (uintptr_t)1);
 	uintptr_t throttleNum = _extensions->deepScanThrottleNum;
 	uintptr_t throttleDen = _extensions->deepScanThrottleDen;
 	uintptr_t scanCacheThrottle = (0 == throttleDen)
 		? UDATA_MAX
 		: (_cacheFreeList.getTotalCacheCount() * throttleNum) / OMR_MAX(throttleDivisor * throttleDen, (uintptr_t)1);
-	uintptr_t releaseScanListCountAtStart = env->_copyForwardStats._releaseScanListCount;
-	uintptr_t maxNodes = _extensions->deepScanMaxNodes;
-	uintptr_t nodesWalked = 0;
 
+	MM_DeepScanBudget budget;
+	budget.nodesWalked              = 0;
+	budget.maxNodes                 = _extensions->deepScanMaxNodes;
+	budget.scanCacheThrottle        = scanCacheThrottle;
+	budget.releaseScanListCountAtStart = env->_copyForwardStats._releaseScanListCount;
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-	uintptr_t objDeepScanned = 0;
+	budget.objDeepScanned           = 0;
 	env->_copyForwardStats._totalDeepStructures += 1;
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
+	/*
+	 * Two-branch walk: traverse the field1 direction from objectPtr to exhaustion,
+	 * then traverse the field2 direction from objectPtr to exhaustion.
+	 *
+	 * The original single-loop design used field2 only as a per-node fallback: when
+	 * field1 failed on the *current* node the walk switched to field2 and continued
+	 * from there.  This means if field1 succeeds for the first several hops and then
+	 * hits a dead-end (forwarded or not-in-CS), field2 is tried on that dead-end node
+	 * — not on objectPtr.  The field2 branch of objectPtr itself is never walked.
+	 *
+	 * For a doubly-linked list node in Balanced GC this matters: field1 ("next") and
+	 * field2 ("prev") lead to disjoint segments of the chain.  A node in the middle
+	 * of a CS-resident cluster can walk forward via field1 to the cluster head, then
+	 * the fallback tries field2 on that head — which points back to the already-copied
+	 * predecessor and stops immediately.  The field2 segment of objectPtr (the nodes
+	 * between objectPtr and the older end of the cluster) is never reached.
+	 *
+	 * Fix: walk each field direction independently from objectPtr, sharing the same
+	 * throttle budget across both passes.  deepScanBranch() returns true when the
+	 * budget is exhausted or a fatal condition (abort / no survivor space) is hit,
+	 * and the outer loop stops immediately.
+	 */
+	uintptr_t branchFields[2] = { priorityFieldOffset1, priorityFieldOffset2 };
+	uintptr_t numBranches = (0 == priorityFieldOffset2) ? 1 : 2;
+
+	for (uintptr_t branch = 0; branch < numBranches; branch += 1) {
+		bool abort = deepScanBranch(env, reservingContext, objectPtr, branchFields[branch], budget);
+		if (abort) {
+			break;
+		}
+	}
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	env->_copyForwardStats._totalObjsDeepScanned += budget.objDeepScanned;
+	if (budget.objDeepScanned > env->_copyForwardStats._depthDeepestStructure) {
+		env->_copyForwardStats._depthDeepestStructure = budget.objDeepScanned;
+	}
+	env->_copyForwardStats._deepScanCachesReleased +=
+		(env->_copyForwardStats._releaseScanListCount - budget.releaseScanListCountAtStart);
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+}
+
+/**
+ * Walk one directional branch of a deep-scan chain starting from objectPtr.
+ * Follows the field at fieldOffset on each successive node, copying unforwarded
+ * in-CS objects until a terminal condition is reached.
+ *
+ * Shared budget (nodesWalked, objDeepScanned) accumulates across multiple
+ * deepScanBranch() calls within one deepScanOutline() invocation so that the
+ * combined work of both the field1 and field2 passes is bounded by the same
+ * throttle and node cap.
+ *
+ * @param budget  Shared mutable state: nodes walked so far, max cap, throttle threshold.
+ * @return true   if the caller should abort all remaining branches (no survivor space,
+ *                GC abort in progress, or budget exhausted); false if this branch
+ *                simply reached a natural terminus (NULL / not-in-CS / forwarded).
+ */
+bool
+MM_CopyForwardScheme::deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t fieldOffset, MM_DeepScanBudget &budget)
+{
+	bool const compressed = _extensions->compressObjectReferences();
+	J9Object *currentDeepObj = objectPtr;
+
 	do {
-		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + priorityField));
+		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + fieldOffset));
 		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
+
 		if ((NULL == targetObj) || ((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop) || !isObjectInEvacuateMemory(targetObj)) {
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-			/* Split the four-way condition into three precise counters, then update the legacy total.
-			 * exitNull counts only true dead-ends: NULL on field2, or NULL on field1 when there is no field2.
-			 * NULL on field1 when field2 exists is a retry, not a dead-end — do not count it here. */
 			if (NULL == targetObj) {
-				if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
-					env->_copyForwardStats._deepScanExitNull += 1;
-				}
-				/* else: field1 was null but field2 exists — will retry, no count */
+				env->_copyForwardStats._deepScanExitNull += 1;
 			} else if (((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop)) {
 				env->_copyForwardStats._deepScanExitOutOfHeap += 1;
 			} else {
@@ -2285,28 +2335,20 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 			}
 			env->_copyForwardStats._deepScanExitNotInEvacuate += 1; /* legacy total */
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
-			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
-				break;
-			}
-			priorityField = priorityFieldOffset2;
-			continue;
+			return false; /* natural terminus — sibling branch may still run */
 		}
 
 		MM_ForwardedHeader forwardHeader(targetObj, compressed);
 		if (forwardHeader.isForwardedPointer()) {
-			/* Object already copied/forwarded - cannot continue deep scan further along this branch */
+			/* Already copied — natural terminus for this branch. */
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			env->_copyForwardStats._deepScanExitForwarded += 1;
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
-			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
-				break;
-			}
-			priorityField = priorityFieldOffset2;
-			continue;
+			return false; /* natural terminus — sibling branch may still run */
 		}
 
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-		/* Green hit: targetObj IS in the evacuate set — walk is about to continue */
+		/* Green hit: targetObj IS in the evacuate set — walk is about to continue. */
 		{
 			MM_HeapRegionDescriptorVLHGC *srcRegion =
 				(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(currentDeepObj);
@@ -2318,52 +2360,43 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 			}
 		}
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 		bool success = copyAndForward(env, reservingContext, currentDeepObj, &prioritySlot);
 		if (!success) {
-			/* First copy failure means no survivor space is available.
-			 * Suppress deep scan for the rest of this GC cycle on this thread. */
+			/* No survivor space — suppress deep scan for the rest of this GC cycle. */
 			env->_copyForwardStats._deepScanSuppressed = true;
-			break;
+			return true; /* abort: stop all remaining branches */
 		}
 		if (_abortInProgress) {
-			break;
+			return true; /* abort: stop all remaining branches */
 		}
 
-		nodesWalked += 1;
-
+		budget.nodesWalked += 1;
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-		objDeepScanned += 1;
+		budget.objDeepScanned += 1;
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
-		/* Hard node cap: stop regardless of cache pressure once the per-invocation
-		 * node limit is reached.  deepScanMaxNodes=UDATA_MAX (default) disables this. */
-		if (nodesWalked >= maxNodes) {
+		/* Hard node cap — deepScanMaxNodes=UDATA_MAX (default) disables this. */
+		if (budget.nodesWalked >= budget.maxNodes) {
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			env->_copyForwardStats._deepScanExitThrottle += 1;
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
-			break;
+			return true; /* budget exhausted: stop all remaining branches */
 		}
 
-		/* Throttle: stop if this thread has fed more scan caches to the shared list
-		 * than its fair share, so other threads can pick up work instead of stalling. */
-		if ((env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart) > scanCacheThrottle) {
+		/* Throttle: stop if this thread has released more than its fair share of
+		 * scan caches to the shared list since this deepScanOutline() call began. */
+		if ((env->_copyForwardStats._releaseScanListCount - budget.releaseScanListCountAtStart) > budget.scanCacheThrottle) {
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			env->_copyForwardStats._deepScanExitThrottle += 1;
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
-			break;
+			return true; /* budget exhausted: stop all remaining branches */
 		}
 
 		currentDeepObj = prioritySlot.readReferenceFromSlot();
 	} while (NULL != currentDeepObj);
 
-#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-	env->_copyForwardStats._totalObjsDeepScanned += objDeepScanned;
-	if (objDeepScanned > env->_copyForwardStats._depthDeepestStructure) {
-		env->_copyForwardStats._depthDeepestStructure = objDeepScanned;
-	}
-	env->_copyForwardStats._deepScanCachesReleased +=
-		(env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart);
-#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+	return false; /* walked to chain end (NULL) — sibling branch may still run */
 }
 
 void

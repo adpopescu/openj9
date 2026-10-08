@@ -64,6 +64,21 @@ class MM_CopyForwardSchemeRootClearer;
 class MM_CopyForwardSchemeTask;
 
 /**
+ * Shared mutable budget passed into deepScanBranch() and accumulated across
+ * both the field1 and field2 passes of a single deepScanOutline() invocation.
+ * Keeps the combined work of both branches within the same throttle and node cap.
+ */
+struct MM_DeepScanBudget {
+	uintptr_t nodesWalked;              /**< Total nodes copied so far across all branches. */
+	uintptr_t maxNodes;                 /**< Hard per-invocation node cap (UDATA_MAX = disabled). */
+	uintptr_t scanCacheThrottle;        /**< Max cache-releases allowed since walk start. */
+	uintptr_t releaseScanListCountAtStart; /**< Baseline release count at deepScanOutline() entry. */
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	uintptr_t objDeepScanned;           /**< Objects copied under deep-scan priority (for TGC stats). */
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+};
+
+/**
  * Copy Forward scheme used for highly mobile partial collection operations.
  * @ingroup GC_Modron_Standard
  */
@@ -710,6 +725,13 @@ private:
 	}
 
 	void deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2);
+
+	/**
+	 * Walk one directional branch of a deep-scan chain.
+	 * See deepScanOutline() for the full description of the two-branch walk design.
+	 * @return true if all remaining branches should be aborted (suppress/abort/budget exhausted).
+	 */
+	bool deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t fieldOffset, MM_DeepScanBudget &budget);
 
 	/**
 	 * Update scan for abort phase (workstack phase)
