@@ -28,9 +28,14 @@
 #include "ModronAssertions.h"
 
 #if defined(J9VM_GC_VLHGC)
+#include "CopyForwardStats.hpp"
 #include "CopyForwardStatsCore.hpp"
 #include "CycleStateVLHGC.hpp"
 #endif /* J9VM_GC_VLHGC */
+#if defined(OMR_GC_MODRON_SCAVENGER)
+#include "Scavenger.hpp"
+#include "ScavengerDelegate.hpp"
+#endif /* OMR_GC_MODRON_SCAVENGER */
 #include "EnvironmentVLHGC.hpp"
 #include "GCExtensions.hpp"
 #include "TgcExtensions.hpp"
@@ -294,6 +299,73 @@ tgcHookLocalGcEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventData, v
 		}
 	}
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) && defined(OMR_GC_MODRON_SCAVENGER)
+	/* Print aggregate GenCon deep-scan exit stats (apples-to-apples with Balanced CP-FW.DS lines). */
+	{
+		MM_ScavengerStats *ds = &extensions->incrementScavengerStats;
+		if (ds->_totalDeepStructures > 0) {
+			uintptr_t totalExits = ds->_deepScanExitNull + ds->_deepScanExitForwarded
+			                     + ds->_deepScanExitNotInCS + ds->_deepScanExitThrottle;
+			tgcExtensions->printf("SCV.T.DS %6zu  deepStructures=%zu  walked=%zu  deepest=%zu  exitNull=%zu  exitFwd=%zu  exitNotInCS=%zu  exitThrottle=%zu  totalExits=%zu\n",
+				gcCount,
+				ds->_totalDeepStructures,
+				ds->_totalObjsDeepScanned,
+				ds->_depthDeepestStructure,
+				ds->_deepScanExitNull,
+				ds->_deepScanExitForwarded,
+				ds->_deepScanExitNotInCS,
+				ds->_deepScanExitThrottle,
+				totalExits);
+			tgcExtensions->printf("SCV.T.DS %6zu  walkDepth[", gcCount);
+			for (uintptr_t i = 0; i < MM_ScavengerStats::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS; i++) {
+				tgcExtensions->printf("%zu", ds->_deepScanWalkHistogram[i]);
+				if (i + 1 < MM_ScavengerStats::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS) tgcExtensions->printf(" ");
+			}
+			tgcExtensions->printf("]  (buckets: 0 1 2-3 4-7 8-15 16-31 32-63 64-127 128-255 256-511 512-1k 1k-2k 2k-4k 4k-8k 8k-16k 16k+)\n");
+		}
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS && OMR_GC_MODRON_SCAVENGER */
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) && defined(OMR_GC_MODRON_SCAVENGER)
+	/* Print GenCon deep-scan class probe table if available. */
+	if (NULL != extensions->scavenger) {
+		MM_DeepScanClassProbe *table = extensions->scavenger->getDelegate()->getDeepScanClassTableGlobal();
+		static const uintptr_t TOP_N = 16;
+		MM_DeepScanClassProbe *sorted[TOP_N];
+		uintptr_t count = 0;
+		for (uintptr_t s = 0; s < DEEP_SCAN_CLASS_TABLE_SIZE; s++) {
+			if (NULL == table[s].clazz) {
+				continue;
+			}
+			if (count < TOP_N || table[s].probeCount > sorted[TOP_N - 1]->probeCount) {
+				uintptr_t insertAt = (count < TOP_N) ? count : (TOP_N - 1);
+				while (insertAt > 0 && sorted[insertAt - 1]->probeCount < table[s].probeCount) {
+					sorted[insertAt] = sorted[insertAt - 1];
+					insertAt -= 1;
+				}
+				sorted[insertAt] = &table[s];
+				if (count < TOP_N) count += 1;
+			}
+		}
+		if (count > 0) {
+			tgcExtensions->printf("deep-scan class probe table (GenCon, top-%zu by probe count, merged across all workers):\n", count);
+			tgcExtensions->printf("  %-60s  fields  probes  walked  exitNull  exitFwd  exitNotInCS\n", "class");
+			for (uintptr_t k = 0; k < count; k++) {
+				MM_DeepScanClassProbe *e = sorted[k];
+				J9UTF8 *name = J9ROMCLASS_CLASSNAME(e->clazz->romClass);
+				tgcExtensions->printf("  %-60.*s  %6zu  %6zu  %6zu  %8zu  %7zu  %11zu\n",
+					(int)J9UTF8_LENGTH(name), J9UTF8_DATA(name),
+					e->numSelfRefFields,
+					e->probeCount,
+					e->totalNodesWalked,
+					e->exitNullCount,
+					e->exitForwardedCount,
+					e->exitNotInCSCount);
+			}
+		}
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS && OMR_GC_MODRON_SCAVENGER */
+
 	tgcExtensions->printf("\n");
 	tgcExtensions->printf("          gc micros   idle   busy active  lists   caches   copied  scanned updates scaling");
 	if (extensions->isConcurrentScavengerEnabled()) {
@@ -488,9 +560,66 @@ tgcHookCopyForwardEnd(J9HookInterface** hook, uintptr_t eventNum, void* eventDat
 					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_AGE_BUCKETS) tgcExtensions->printf(" ");
 				}
 				tgcExtensions->printf("]\n");
+				/* Walk-depth histogram: bucket k = log2(walked+1), so k=0 means walked=0 (immediate exit),
+				 * k=1 means walked=1, k=2 means walked=2-3, k=3 means walked=4-7, etc. */
+				tgcExtensions->printf("                                                                                                       walkDepth[");
+				for (uintptr_t i = 0; i < MM_CopyForwardStatsCore::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS; i++) {
+					tgcExtensions->printf("%zu", env->_copyForwardStats._deepScanWalkHistogram[i]);
+					if (i + 1 < MM_CopyForwardStatsCore::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS) tgcExtensions->printf(" ");
+				}
+				tgcExtensions->printf("]  (buckets: 0 1 2-3 4-7 8-15 16-31 32-63 64-127 128-255 256-511 512-1k 1k-2k 2k-4k 4k-8k 8k-16k 16k+)\n");
 			}
 		}
 	}
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Print the global class probe table (merged from all workers), top-16 by probeCount. */
+	{
+		MM_CopyForwardStats *cfStats = &static_cast<MM_CycleStateVLHGC*>(mainEnv->_cycleState)->_vlhgcIncrementStats._copyForwardStats;
+		MM_DeepScanClassProbe *table = cfStats->_deepScanClassTableGlobal;
+		static const uintptr_t TOP_N = 16;
+
+		/*
+		 * One-pass insertion sort into a bounded sorted array of pointers.
+		 * For each non-empty slot, keep only the top TOP_N by probeCount.
+		 */
+		MM_DeepScanClassProbe *sorted[TOP_N];
+		uintptr_t count = 0;
+		for (uintptr_t s = 0; s < DEEP_SCAN_CLASS_TABLE_SIZE; s++) {
+			if (NULL == table[s].clazz) {
+				continue;
+			}
+			/* Accept if there is room, or if this entry beats the current minimum. */
+			if (count < TOP_N || table[s].probeCount > sorted[TOP_N - 1]->probeCount) {
+				uintptr_t insertAt = (count < TOP_N) ? count : (TOP_N - 1);
+				/* Shift entries right to make room (descending order). */
+				while (insertAt > 0 && sorted[insertAt - 1]->probeCount < table[s].probeCount) {
+					sorted[insertAt] = sorted[insertAt - 1];
+					insertAt -= 1;
+				}
+				sorted[insertAt] = &table[s];
+				if (count < TOP_N) count += 1;
+			}
+		}
+
+		if (count > 0) {
+			tgcExtensions->printf("deep-scan class probe table (top-%zu by probe count, merged across all workers):\n", count);
+			tgcExtensions->printf("  %-60s  fields  probes  walked  exitNull  exitFwd  exitNotInCS\n", "class");
+			for (uintptr_t k = 0; k < count; k++) {
+				MM_DeepScanClassProbe *e = sorted[k];
+				J9UTF8 *name = J9ROMCLASS_CLASSNAME(e->clazz->romClass);
+				tgcExtensions->printf("  %-60.*s  %6zu  %6zu  %6zu  %8zu  %7zu  %11zu\n",
+					(int)J9UTF8_LENGTH(name), J9UTF8_DATA(name),
+					e->numSelfRefFields,
+					e->probeCount,
+					e->totalNodesWalked,
+					e->exitNullCount,
+					e->exitForwardedCount,
+					e->exitNotInCSCount);
+			}
+		}
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 #endif /* J9VM_GC_VLHGC */
 

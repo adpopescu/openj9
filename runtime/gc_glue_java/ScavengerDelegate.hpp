@@ -35,6 +35,7 @@
 
 #include "j9.h"
 #include "CollectorLanguageInterface.hpp"
+#include "CopyForwardStats.hpp"
 #include "CompactScheme.hpp"
 #include "EnvironmentBase.hpp"
 #include "GCExtensions.hpp"
@@ -89,6 +90,16 @@ protected:
 #if defined(OMR_GC_COMPRESSED_POINTERS) && defined(OMR_GC_FULL_POINTERS)
 	bool _compressObjectReferences;
 #endif /* defined(OMR_GC_COMPRESSED_POINTERS) && defined(OMR_GC_FULL_POINTERS) */
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/**
+	 * Per-worker class probe tables for GenCon deep scan.
+	 * Declared after _compressObjectReferences to match constructor init order.
+	 * Flat block: _extensions->gcThreadCount * DEEP_SCAN_CLASS_TABLE_SIZE entries.
+	 */
+	MM_DeepScanClassProbe *_deepScanClassTableBlock;
+	MM_DeepScanClassProbe  _deepScanClassTableGlobal[DEEP_SCAN_CLASS_TABLE_SIZE];
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 public:
 
@@ -185,6 +196,15 @@ public:
 
 	bool initialize(MM_EnvironmentBase *env);
 	void tearDown(MM_EnvironmentBase *env);
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/** Record one probe entry for clazz in this worker's per-class table. Returns the entry pointer for subsequent exit/walked updates, or NULL if table is full. */
+	MM_DeepScanClassProbe *deepScanRecordClassProbe(uintptr_t workerID, J9Class *clazz, uintptr_t numSelfRefFields);
+	/** Merge worker workerID's table into _deepScanClassTableGlobal. Called under gcStatsMutex. */
+	void deepScanMergeClassTable(uintptr_t workerID);
+	/** Return the global merged probe table for TGC output. */
+	MM_DeepScanClassProbe *getDeepScanClassTableGlobal() { return _deepScanClassTableGlobal; }
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 	MM_ScavengerDelegate(MM_EnvironmentBase* env);
 };

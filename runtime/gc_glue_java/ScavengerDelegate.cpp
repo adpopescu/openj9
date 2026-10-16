@@ -147,6 +147,17 @@ MM_ScavengerDelegate::initialize(MM_EnvironmentBase *env)
 	}
 #endif /* OMR_GC_CONCURRENT_SCAVENGER */
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	{
+		uintptr_t tableAllocSize = sizeof(MM_DeepScanClassProbe) * _extensions->gcThreadCount * DEEP_SCAN_CLASS_TABLE_SIZE;
+		_deepScanClassTableBlock = (MM_DeepScanClassProbe *)_extensions->getForge()->allocate(tableAllocSize, MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
+		if (NULL == _deepScanClassTableBlock) {
+			return false;
+		}
+		memset(_deepScanClassTableBlock, 0, tableAllocSize);
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 	return true;
 }
 
@@ -156,6 +167,12 @@ MM_ScavengerDelegate::initialize(MM_EnvironmentBase *env)
 void
 MM_ScavengerDelegate::tearDown(MM_EnvironmentBase *env)
 {
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	if (NULL != _deepScanClassTableBlock) {
+		_extensions->getForge()->free(_deepScanClassTableBlock);
+		_deepScanClassTableBlock = NULL;
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
 void
@@ -164,6 +181,10 @@ MM_ScavengerDelegate::mainSetupForGC(MM_EnvironmentBase * envBase)
 	_extensions->continuationStats.clear();
 	/* Clear the global java-only gc statistics */
 	_extensions->scavengerJavaStats.clear();
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Zero the global merged class probe table at scavenge start. */
+	memset(_deepScanClassTableGlobal, 0, sizeof(_deepScanClassTableGlobal));
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 	/* correspondent lists will be build this scavenge */
 	_shouldScavengeSoftReferenceObjects = false;
@@ -191,6 +212,14 @@ MM_ScavengerDelegate::workerSetupForGC_clearEnvironmentLangStats(MM_EnvironmentB
 	/* clear thread-local java-only gc stats */
 	envBase->getGCEnvironment()->_scavengerJavaStats.clear();
 	envBase->getGCEnvironment()->_continuationStats.clear();
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Zero this worker's per-class probe table. */
+	if (NULL != _deepScanClassTableBlock) {
+		uintptr_t workerID = MM_EnvironmentBase::getEnvironment(envBase->getOmrVMThread())->getWorkerID();
+		memset(_deepScanClassTableBlock + (workerID * DEEP_SCAN_CLASS_TABLE_SIZE), 0,
+			sizeof(MM_DeepScanClassProbe) * DEEP_SCAN_CLASS_TABLE_SIZE);
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
 void
@@ -222,6 +251,14 @@ MM_ScavengerDelegate::mergeGCStats_mergeLangStats(MM_EnvironmentBase * envBase)
 	finalGCJavaStats->_monitorReferenceCandidates += scavJavaStats->_monitorReferenceCandidates;
 
 	scavJavaStats->clear();
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Merge this worker's class probe table into the global. Called under gcStatsMutex. */
+	if (NULL != _deepScanClassTableBlock) {
+		MM_EnvironmentStandard *env = MM_EnvironmentStandard::getEnvironment(envBase);
+		deepScanMergeClassTable(env->getWorkerID());
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
 void
@@ -395,7 +432,28 @@ MM_ScavengerDelegate::getObjectScanner(MM_EnvironmentStandard *env, omrobjectptr
 
 	switch(_extensions->objectModel.getScanType(clazzPtr)) {
 	case GC_ObjectModel::SCAN_MIXED_OBJECT_LINKED:
-		_extensions->scavenger->deepScan(env, objectPtr, clazzPtr->selfReferencingField1, clazzPtr->selfReferencingField2);
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		if (NULL != _deepScanClassTableBlock && _extensions->scavenger->shouldStartDeepScan(env, objectPtr)) {
+			uintptr_t numSelfRefFields = ((0 != clazzPtr->selfReferencingField1) ? 1 : 0)
+			                           + ((0 != clazzPtr->selfReferencingField2) ? 1 : 0);
+			MM_DeepScanClassProbe *probeEntry = deepScanRecordClassProbe(env->getWorkerID(), clazzPtr, numSelfRefFields);
+			uintptr_t walked = 0;
+			uintptr_t exitCause = MM_Scavenger::DEEP_SCAN_EXIT_NULL;
+			_extensions->scavenger->deepScan(env, objectPtr, clazzPtr->selfReferencingField1, clazzPtr->selfReferencingField2, &walked, &exitCause);
+			if (NULL != probeEntry) {
+				probeEntry->totalNodesWalked += walked;
+				switch (exitCause) {
+				case MM_Scavenger::DEEP_SCAN_EXIT_NULL:      probeEntry->exitNullCount      += 1; break;
+				case MM_Scavenger::DEEP_SCAN_EXIT_FORWARDED: probeEntry->exitForwardedCount += 1; break;
+				case MM_Scavenger::DEEP_SCAN_EXIT_NOT_IN_CS: probeEntry->exitNotInCSCount   += 1; break;
+				default: break;
+				}
+			}
+		} else
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+		{
+			_extensions->scavenger->deepScan(env, objectPtr, clazzPtr->selfReferencingField1, clazzPtr->selfReferencingField2);
+		}
 		/* Fall through and treat as mixed object (create mixed object scanner) */
 	case GC_ObjectModel::SCAN_ATOMIC_MARKABLE_REFERENCE_OBJECT:
 	case GC_ObjectModel::SCAN_MIXED_OBJECT:
@@ -865,6 +923,59 @@ MM_ScavengerDelegate::healSlots(MM_EnvironmentBase *env)
 }
 #endif /* defined(OMR_ENV_DATA64) && defined(OMR_GC_FULL_POINTERS) */
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+MM_DeepScanClassProbe *
+MM_ScavengerDelegate::deepScanRecordClassProbe(uintptr_t workerID, J9Class *clazz, uintptr_t numSelfRefFields)
+{
+	MM_DeepScanClassProbe *table = _deepScanClassTableBlock + (workerID * DEEP_SCAN_CLASS_TABLE_SIZE);
+	uintptr_t hash = ((uintptr_t)clazz >> 3) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+	for (uintptr_t i = 0; i < DEEP_SCAN_CLASS_TABLE_SIZE; i++) {
+		uintptr_t slot = (hash + i) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+		if (NULL == table[slot].clazz) {
+			table[slot].clazz            = clazz;
+			table[slot].numSelfRefFields = numSelfRefFields;
+			table[slot].probeCount       = 1;
+			return &table[slot];
+		}
+		if (table[slot].clazz == clazz) {
+			table[slot].probeCount += 1;
+			return &table[slot];
+		}
+	}
+	/* Table full — drop silently. */
+	return NULL;
+}
+
+void
+MM_ScavengerDelegate::deepScanMergeClassTable(uintptr_t workerID)
+{
+	MM_DeepScanClassProbe *src = _deepScanClassTableBlock + (workerID * DEEP_SCAN_CLASS_TABLE_SIZE);
+	MM_DeepScanClassProbe *dst = _deepScanClassTableGlobal;
+	for (uintptr_t s = 0; s < DEEP_SCAN_CLASS_TABLE_SIZE; s++) {
+		if (NULL == src[s].clazz) {
+			continue;
+		}
+		J9Class *clazz = src[s].clazz;
+		uintptr_t hash = ((uintptr_t)clazz >> 3) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+		for (uintptr_t i = 0; i < DEEP_SCAN_CLASS_TABLE_SIZE; i++) {
+			uintptr_t slot = (hash + i) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+			if (NULL == dst[slot].clazz) {
+				dst[slot] = src[s];
+				break;
+			}
+			if (dst[slot].clazz == clazz) {
+				dst[slot].probeCount          += src[s].probeCount;
+				dst[slot].totalNodesWalked    += src[s].totalNodesWalked;
+				dst[slot].exitNullCount       += src[s].exitNullCount;
+				dst[slot].exitForwardedCount  += src[s].exitForwardedCount;
+				dst[slot].exitNotInCSCount    += src[s].exitNotInCSCount;
+				break;
+			}
+		}
+	}
+}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 MM_ScavengerDelegate::MM_ScavengerDelegate(MM_EnvironmentBase* env)
 	: _omrVM(MM_GCExtensions::getExtensions(env)->getOmrVM())
 	, _javaVM(MM_GCExtensions::getExtensions(env)->getJavaVM())
@@ -885,8 +996,14 @@ MM_ScavengerDelegate::MM_ScavengerDelegate(MM_EnvironmentBase* env)
 #if defined(OMR_GC_COMPRESSED_POINTERS) && defined(OMR_GC_FULL_POINTERS)
 	, _compressObjectReferences(env->compressObjectReferences())
 #endif /* defined(OMR_GC_COMPRESSED_POINTERS) && defined(OMR_GC_FULL_POINTERS) */
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	, _deepScanClassTableBlock(NULL)
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 {
 	_typeId = __FUNCTION__;
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	memset(_deepScanClassTableGlobal, 0, sizeof(_deepScanClassTableGlobal));
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
 #endif /* defined(OMR_GC_MODRON_SCAVENGER) */

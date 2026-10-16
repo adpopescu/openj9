@@ -168,6 +168,16 @@ private:
 	bool _tracingEnabled;  /**< Temporary variable to enable tracing of activity */
 	MM_AllocationContextTarok *_commonContext;	/**< The common context is used as an opaque token to represent cases where we don't want to relocate objects during NUMA-aware copy-forward since relocating to the common context is currently disabled */
 	MM_CopyForwardCompactGroup *_compactGroupBlock; /**< A block of MM_CopyForwardCompactGroup structs which is subdivided among the GC threads */
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/**
+	 * Per-worker class probe tables: _deepScanClassTableBlock[workerID * DEEP_SCAN_CLASS_TABLE_SIZE]
+	 * points to the start of worker workerID's table.  Allocated in initialize(), zeroed at the
+	 * start of each PGC cycle in clearGCStats(), and merged into
+	 * _vlhgcIncrementStats._copyForwardStats._deepScanClassTableGlobal in mergeGCStats().
+	 * Declared immediately after _compactGroupBlock to match constructor init order.
+	 */
+	MM_DeepScanClassProbe *_deepScanClassTableBlock; /**< Flat block: gcThreadCount * DEEP_SCAN_CLASS_TABLE_SIZE entries. */
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	uintptr_t _arraySplitSize; /**< The number of elements to be scanned in each array chunk (this determines the degree of parallelization) */
 
 	uintptr_t _regionSublistContentionThreshold	/**< The number of threads which must be contending on the same region sublist for us to decide that another sublist should be created to alleviate contention (reset at the beginning of every CopyForward task) */;
@@ -732,6 +742,24 @@ private:
 	 * @return true if all remaining branches should be aborted (suppress/abort/budget exhausted).
 	 */
 	bool deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t fieldOffset, MM_DeepScanBudget &budget);
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/**
+	 * Record a probe-entry for the class of objectPtr into this worker's per-class table.
+	 * @param env     Worker thread (provides workerID).
+	 * @param clazz   Class of the object entering deepScanBranch().
+	 * @param numSelfRefFields  1 or 2 depending on how many priority fields are non-zero.
+	 */
+	void deepScanRecordClassProbe(MM_EnvironmentVLHGC *env, J9Class *clazz, uintptr_t numSelfRefFields);
+
+	/**
+	 * Merge this worker's per-class probe table into dst.
+	 * Called from mergeGCStats() under gcStatsMutex.
+	 * @param workerID  The calling thread's worker ID.
+	 * @param dst       Destination table (the global merged table in the cycle-state _copyForwardStats).
+	 */
+	void deepScanMergeClassTable(uintptr_t workerID, MM_DeepScanClassProbe *dst);
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 	/**
 	 * Update scan for abort phase (workstack phase)

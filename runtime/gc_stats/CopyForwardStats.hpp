@@ -38,7 +38,28 @@
 
 #if defined(J9VM_GC_VLHGC)
 
+#include "j9.h"
 #include "ReferenceStats.hpp"
+
+/**
+ * Per-class probe entry accumulated across all workers per PGC cycle.
+ * Stored in the merged MM_CopyForwardStats so TgcParallel can print it
+ * without needing access to MM_CopyForwardScheme.
+ */
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+struct MM_DeepScanClassProbe {
+	J9Class   *clazz;              /**< Key: NULL means slot is empty. */
+	uintptr_t  numSelfRefFields;   /**< Number of non-zero priority fields (1 or 2). */
+	uintptr_t  probeCount;         /**< Times deepScanBranch() was entered for this class. */
+	uintptr_t  totalNodesWalked;   /**< Total in-CS nodes copied for this class across all probes. */
+	uintptr_t  exitNullCount;      /**< Branch terminations due to null prioritySlot. */
+	uintptr_t  exitForwardedCount; /**< Branch terminations because next node already forwarded. */
+	uintptr_t  exitNotInCSCount;   /**< Branch terminations because next node not in collection set. */
+};
+
+/** Number of slots in the class probe hash table (must be a power of 2). */
+static const uintptr_t DEEP_SCAN_CLASS_TABLE_SIZE = 64;
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 /**
  * Storage for statistics relevant to a copy forward collector.
@@ -74,6 +95,11 @@ public:
 
 	uint64_t _cycleStartTime; /**< The start time of a copy forward cycle */
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/** Global class probe table, merged from all workers at PGC end. Printed by TgcParallel. */
+	MM_DeepScanClassProbe _deepScanClassTableGlobal[DEEP_SCAN_CLASS_TABLE_SIZE];
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 private:
 	
 	/* 
@@ -105,6 +131,10 @@ public:
 		_offHeapRegionsCleared = 0;
 		_offHeapRegionCandidates = 0;
 #endif /* defined(J9VM_GC_SPARSE_HEAP_ALLOCATION) */
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		memset(_deepScanClassTableGlobal, 0, sizeof(_deepScanClassTableGlobal));
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	}
 	
 	/**
@@ -152,7 +182,11 @@ public:
 		, _offHeapRegionsCleared(0)
 		, _offHeapRegionCandidates(0)
 #endif /* defined(J9VM_GC_SPARSE_HEAP_ALLOCATION) */
-	{}
+	{
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		memset(_deepScanClassTableGlobal, 0, sizeof(_deepScanClassTableGlobal));
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+	}
 };
 
 #endif /* J9VM_GC_VLHGC */

@@ -190,6 +190,9 @@ MM_CopyForwardScheme::MM_CopyForwardScheme(MM_EnvironmentVLHGC *env, MM_HeapRegi
 	, _tracingEnabled(false)
 	, _commonContext(NULL)
 	, _compactGroupBlock(NULL)
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	, _deepScanClassTableBlock(NULL)
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	, _arraySplitSize(0)
 	, _regionSublistContentionThreshold(0)
 	, _failedToExpand(false)
@@ -344,6 +347,17 @@ MM_CopyForwardScheme::initialize(MM_EnvironmentVLHGC *env)
 	}
 	memset(_regionShouldMark, 0, _regionManager->getTableRegionCount() * sizeof(bool));
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	{
+		uintptr_t tableAllocSize = sizeof(MM_DeepScanClassProbe) * _extensions->gcThreadCount * DEEP_SCAN_CLASS_TABLE_SIZE;
+		_deepScanClassTableBlock = (MM_DeepScanClassProbe *)_extensions->getForge()->allocate(tableAllocSize, MM_AllocationCategory::FIXED, J9_GET_CALLSITE());
+		if (NULL == _deepScanClassTableBlock) {
+			return false;
+		}
+		memset(_deepScanClassTableBlock, 0, tableAllocSize);
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 	return true;
 }
 
@@ -385,6 +399,13 @@ MM_CopyForwardScheme::tearDown(MM_EnvironmentVLHGC *env)
 		env->getForge()->free(_compactGroupBlock);
 		_compactGroupBlock = NULL;
 	}
+
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	if (NULL != _deepScanClassTableBlock) {
+		env->getForge()->free(_deepScanClassTableBlock);
+		_deepScanClassTableBlock = NULL;
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 
 	if (NULL != _compressedSurvivorTable) {
 		env->getForge()->free(_compressedSurvivorTable);
@@ -443,6 +464,14 @@ MM_CopyForwardScheme::clearGCStats(MM_EnvironmentVLHGC *env)
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._copyForwardStats.clear();
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._workPacketStats.clear();
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._continuationStats.clear();
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Zero per-worker tables at PGC start (global merged table is cleared by clearGCStats()
+	 * calling MM_CopyForwardStats::clear() which memsets _deepScanClassTableGlobal). */
+	if (NULL != _deepScanClassTableBlock) {
+		memset(_deepScanClassTableBlock, 0,
+			sizeof(MM_DeepScanClassProbe) * _extensions->gcThreadCount * DEEP_SCAN_CLASS_TABLE_SIZE);
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 }
 
 void
@@ -1563,6 +1592,12 @@ MM_CopyForwardScheme::mergeGCStats(MM_EnvironmentVLHGC *env)
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._workPacketStats.merge(&env->_workPacketStats);
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._irrsStats.merge(&env->_irrsStats);
 	static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._continuationStats.merge(&env->_continuationStats);
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	if (NULL != _deepScanClassTableBlock) {
+		deepScanMergeClassTable(env->getWorkerID(),
+			static_cast<MM_CycleStateVLHGC *>(env->_cycleState)->_vlhgcIncrementStats._copyForwardStats._deepScanClassTableGlobal);
+	}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	omrthread_monitor_exit(_extensions->gcStatsMutex);
 	
 	/* record the thread-specific parallelism stats in the trace buffer. This partially duplicates info in -Xtgc:parallel */ 
@@ -2160,6 +2195,69 @@ MM_CopyForwardScheme::copyHotField(MM_EnvironmentVLHGC *env, J9Object *destinati
 	}
 }
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+/**
+ * Record one probe entry for clazz in this worker's class probe table.
+ * Uses open-addressing with linear probing; overflows are silently dropped
+ * (the table is large enough for the classes seen in practice).
+ */
+void
+MM_CopyForwardScheme::deepScanRecordClassProbe(MM_EnvironmentVLHGC *env, J9Class *clazz, uintptr_t numSelfRefFields)
+{
+	MM_DeepScanClassProbe *table = _deepScanClassTableBlock + (env->getWorkerID() * DEEP_SCAN_CLASS_TABLE_SIZE);
+	uintptr_t hash = ((uintptr_t)clazz >> 3) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+	for (uintptr_t i = 0; i < DEEP_SCAN_CLASS_TABLE_SIZE; i++) {
+		uintptr_t slot = (hash + i) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+		if (NULL == table[slot].clazz) {
+			/* Empty slot — insert new entry. */
+			table[slot].clazz           = clazz;
+			table[slot].numSelfRefFields = numSelfRefFields;
+			table[slot].probeCount      = 1;
+			return;
+		}
+		if (table[slot].clazz == clazz) {
+			/* Existing entry — just bump the probe count. */
+			table[slot].probeCount += 1;
+			return;
+		}
+		/* Collision — keep probing. */
+	}
+	/* Table full — drop silently. */
+}
+
+/**
+ * Merge worker workerID's class probe table into dst.
+ * Must be called under gcStatsMutex (same lock protecting copyForwardStats merge).
+ */
+void
+MM_CopyForwardScheme::deepScanMergeClassTable(uintptr_t workerID, MM_DeepScanClassProbe *dst)
+{
+	MM_DeepScanClassProbe *src = _deepScanClassTableBlock + (workerID * DEEP_SCAN_CLASS_TABLE_SIZE);
+	for (uintptr_t s = 0; s < DEEP_SCAN_CLASS_TABLE_SIZE; s++) {
+		if (NULL == src[s].clazz) {
+			continue;
+		}
+		J9Class *clazz = src[s].clazz;
+		uintptr_t hash = ((uintptr_t)clazz >> 3) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+		for (uintptr_t i = 0; i < DEEP_SCAN_CLASS_TABLE_SIZE; i++) {
+			uintptr_t slot = (hash + i) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+			if (NULL == dst[slot].clazz) {
+				dst[slot] = src[s];
+				break;
+			}
+			if (dst[slot].clazz == clazz) {
+				dst[slot].probeCount        += src[s].probeCount;
+				dst[slot].totalNodesWalked  += src[s].totalNodesWalked;
+				dst[slot].exitNullCount     += src[s].exitNullCount;
+				dst[slot].exitForwardedCount += src[s].exitForwardedCount;
+				dst[slot].exitNotInCSCount  += src[s].exitNotInCSCount;
+				break;
+			}
+		}
+	}
+}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 void
 MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2)
 {
@@ -2270,6 +2368,17 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	if (budget.objDeepScanned > env->_copyForwardStats._depthDeepestStructure) {
 		env->_copyForwardStats._depthDeepestStructure = budget.objDeepScanned;
 	}
+	{
+		/* Bucket = floor(log2(objDeepScanned + 1)), capped at BUCKETS-1.
+		 * walked=0 → bucket 0, walked=1 → bucket 1, walked=2-3 → bucket 2, etc. */
+		uintptr_t v = budget.objDeepScanned + 1;
+		uintptr_t bucket = 0;
+		while (v > 1) { v >>= 1; bucket++; }
+		if (bucket >= MM_CopyForwardStatsCore::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS) {
+			bucket = MM_CopyForwardStatsCore::DEEP_SCAN_WALK_HISTOGRAM_BUCKETS - 1;
+		}
+		env->_copyForwardStats._deepScanWalkHistogram[bucket] += 1;
+	}
 	env->_copyForwardStats._deepScanCachesReleased +=
 		(env->_copyForwardStats._releaseScanListCount - budget.releaseScanListCountAtStart);
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
@@ -2296,6 +2405,39 @@ MM_CopyForwardScheme::deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationCont
 	bool const compressed = _extensions->compressObjectReferences();
 	J9Object *currentDeepObj = objectPtr;
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+	/* Record class probe at branch entry.  We track nodes walked per class by
+	 * diffing budget.nodesWalked at each exit against this baseline. */
+	J9Class *probeClazz = J9GC_J9OBJECT_CLAZZ(objectPtr, env);
+	uintptr_t numSelfRefFields = ((0 != probeClazz->selfReferencingField1) ? 1 : 0)
+	                           + ((0 != probeClazz->selfReferencingField2) ? 1 : 0);
+	deepScanRecordClassProbe(env, probeClazz, numSelfRefFields);
+	uintptr_t nodesAtBranchEntry = budget.nodesWalked;
+	/* Pointer to the probe slot so we can update walked/exit counts at each return. */
+	MM_DeepScanClassProbe *probeEntry = NULL;
+	{
+		MM_DeepScanClassProbe *table = _deepScanClassTableBlock + (env->getWorkerID() * DEEP_SCAN_CLASS_TABLE_SIZE);
+		uintptr_t hash = ((uintptr_t)probeClazz >> 3) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+		for (uintptr_t i = 0; i < DEEP_SCAN_CLASS_TABLE_SIZE; i++) {
+			uintptr_t slot = (hash + i) & (DEEP_SCAN_CLASS_TABLE_SIZE - 1);
+			if (table[slot].clazz == probeClazz) {
+				probeEntry = &table[slot];
+				break;
+			}
+			if (NULL == table[slot].clazz) {
+				break; /* not found (table full drop) */
+			}
+		}
+	}
+#define DEEP_SCAN_RECORD_EXIT(field) \
+	do { \
+		if (NULL != probeEntry) { \
+			probeEntry->totalNodesWalked += (budget.nodesWalked - nodesAtBranchEntry); \
+			probeEntry->field += 1; \
+		} \
+	} while (0)
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
+
 	do {
 		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + fieldOffset));
 		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
@@ -2304,11 +2446,14 @@ MM_CopyForwardScheme::deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationCont
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			if (NULL == targetObj) {
 				env->_copyForwardStats._deepScanExitNull += 1;
+				DEEP_SCAN_RECORD_EXIT(exitNullCount);
 			} else if (((uintptr_t)targetObj < (uintptr_t)_heapBase) || ((uintptr_t)targetObj >= (uintptr_t)_heapTop)) {
 				env->_copyForwardStats._deepScanExitOutOfHeap += 1;
+				/* exitOutOfHeap not tracked per-class (rare) */
 			} else {
 				/* In-heap but not in collection set */
 				env->_copyForwardStats._deepScanExitNotInCS += 1;
+				DEEP_SCAN_RECORD_EXIT(exitNotInCSCount);
 				MM_HeapRegionDescriptorVLHGC *targetRegion =
 					(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(targetObj);
 				MM_HeapRegionDescriptorVLHGC *srcRegion =
@@ -2343,6 +2488,7 @@ MM_CopyForwardScheme::deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationCont
 			/* Already copied — natural terminus for this branch. */
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 			env->_copyForwardStats._deepScanExitForwarded += 1;
+			DEEP_SCAN_RECORD_EXIT(exitForwardedCount);
 #endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 			return false; /* natural terminus — sibling branch may still run */
 		}
@@ -2396,6 +2542,9 @@ MM_CopyForwardScheme::deepScanBranch(MM_EnvironmentVLHGC *env, MM_AllocationCont
 		currentDeepObj = prioritySlot.readReferenceFromSlot();
 	} while (NULL != currentDeepObj);
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+#undef DEEP_SCAN_RECORD_EXIT
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	return false; /* walked to chain end (NULL) — sibling branch may still run */
 }
 
