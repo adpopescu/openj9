@@ -2164,19 +2164,37 @@ MM_CopyForwardScheme::depthCopyHotFields(MM_EnvironmentVLHGC *env, J9Class *claz
 	if (env->_hotFieldCopyDepthCount < _extensions->depthCopyMax && NULL != hotFieldsInfo) {
 		uint8_t hotFieldOffset = hotFieldsInfo->hotFieldOffset1;
 		if (U_8_MAX != hotFieldOffset) {
-			copyHotField(env, destinationObjectPtr, hotFieldOffset, reservingContext);
+			/*
+			 * Do not hot-field-copy a field that deep scan will walk as a self-referencing chain.
+			 * hotFieldOffset is a slot index (byte offset / sizeof(reference)), while
+			 * selfReferencingField1/2 are byte offsets — convert before comparing.
+			 * Skipping here avoids the race where depthCopyHotFields installs a forwarding
+			 * pointer into the next-pointer slot before deepScanOutline can walk it, which
+			 * causes deepScanOutline to exit immediately with exitForwarded on every hop.
+			 */
+			uintptr_t const refSize = _extensions->compressObjectReferences() ? sizeof(uint32_t) : sizeof(uintptr_t);
+			uintptr_t const hfByteOffset1 = (uintptr_t)hotFieldOffset * refSize;
+			if ((hfByteOffset1 != clazz->selfReferencingField1) && (hfByteOffset1 != clazz->selfReferencingField2)) {
+				copyHotField(env, destinationObjectPtr, hotFieldOffset, reservingContext);
+			}
 			uint8_t hotFieldOffset2 = hotFieldsInfo->hotFieldOffset2;
-			if (U_8_MAX !=hotFieldOffset2) {
-				copyHotField(env, destinationObjectPtr, hotFieldOffset2, reservingContext);
+			if (U_8_MAX != hotFieldOffset2) {
+				uintptr_t const hfByteOffset2 = (uintptr_t)hotFieldOffset2 * refSize;
+				if ((hfByteOffset2 != clazz->selfReferencingField1) && (hfByteOffset2 != clazz->selfReferencingField2)) {
+					copyHotField(env, destinationObjectPtr, hotFieldOffset2, reservingContext);
+				}
 				uint8_t hotFieldOffset3 = hotFieldsInfo->hotFieldOffset3;
 				if (U_8_MAX != hotFieldOffset3) {
-					copyHotField(env, destinationObjectPtr, hotFieldOffset3, reservingContext);
+					uintptr_t const hfByteOffset3 = (uintptr_t)hotFieldOffset3 * refSize;
+					if ((hfByteOffset3 != clazz->selfReferencingField1) && (hfByteOffset3 != clazz->selfReferencingField2)) {
+						copyHotField(env, destinationObjectPtr, hotFieldOffset3, reservingContext);
+					}
 				}
 			}
 		} else if ((_extensions->alwaysDepthCopyFirstOffset) && (false == _extensions->objectModel.isIndexable(destinationObjectPtr))) {
 			copyHotField(env, destinationObjectPtr, DEFAULT_HOT_FIELD_OFFSET, reservingContext);
 		}
-	}	
+	}
 }
 
 MMINLINE void
