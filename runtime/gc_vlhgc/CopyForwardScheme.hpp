@@ -962,6 +962,7 @@ private:
 	J9Object *copy(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, MM_ForwardedHeader *forwardedHeader, bool leafType = false);
 
 
+#if 0 /* superseded by iterateAndCopyForwardHotFields() */
 	/* Depth copy the hot fields of an object.
 	 * @param forwardedHeader - forwarded header of an object
 	 * @param destinationObjectPtr - destinationObjectPtr of the object described by the forwardedHeader
@@ -974,6 +975,8 @@ private:
 	 * @param offset  - the object field offset of the hot field to be copied
 	 */
 	MMINLINE void copyHotField(MM_EnvironmentVLHGC *env, J9Object *destinationObjectPtr, uint8_t offset, MM_AllocationContextTarok *reservingContext);
+#endif /* 0 */
+
 	/**
 	 * Push any remaining cached mark map data out before the copy scan cache is released.
 	 * @param env GC thread.
@@ -1058,6 +1061,12 @@ private:
 	bool isObjectInNoEvacuationRegions(MM_EnvironmentVLHGC *env, J9Object *objectPtr);
 
 	bool randomDecideForceNonEvacuatedRegion(uintptr_t ratio);
+
+	/**
+	 * Copy and forward the hot fields of a mixed object at scan time, before iterateAndCopyforwardSlotReference().
+	 * @return false if a copy failed and the object was pushed on the work stack
+	 */
+	MMINLINE bool iterateAndCopyForwardHotFields(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr);
 
 	/**
 	 *  Iterate the slot reference and parse and pass leaf bit of the reference to copy forward

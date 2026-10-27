@@ -2119,8 +2119,8 @@ MM_CopyForwardScheme::copy(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *
 					copyLeafChildren(env, reservingContext, destinationObjectPtr);
 				}
 #endif /* J9VM_GC_LEAF_BITS */
-				/* depth copy the hot fields of an object if scavenger dynamicBreadthFirstScanOrdering is enabled */
-				depthCopyHotFields(env, objectModel->getPreservedClass(forwardedHeader), destinationObjectPtr, reservingContext);
+				/* Hot fields are no longer depth copied here. They are copy-forwarded at scan time by iterateAndCopyForwardHotFields(). */
+				/* depthCopyHotFields(env, objectModel->getPreservedClass(forwardedHeader), destinationObjectPtr, reservingContext); */
 			}
 			/* return value for updating the slot */
 			result = destinationObjectPtr;
@@ -2157,6 +2157,7 @@ MM_CopyForwardScheme::copyLeafChildren(MM_EnvironmentVLHGC *env, MM_AllocationCo
 }
 #endif /* J9VM_GC_LEAF_BITS */
 
+#if 0 /* superseded by iterateAndCopyForwardHotFields(), which handles hot fields at scan time */
 MMINLINE void
 MM_CopyForwardScheme::depthCopyHotFields(MM_EnvironmentVLHGC *env, J9Class *clazz, J9Object *destinationObjectPtr, MM_AllocationContextTarok *reservingContext) {
 	/* depth copy the hot fields of an object up to a depth specified by depthCopyMax */
@@ -2212,6 +2213,7 @@ MM_CopyForwardScheme::copyHotField(MM_EnvironmentVLHGC *env, J9Object *destinati
 		}
 	}
 }
+#endif /* 0 */
 
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 /**
@@ -2778,6 +2780,46 @@ MM_CopyForwardScheme::scanContinuationObject(MM_EnvironmentVLHGC *env, MM_Alloca
 }
 
 /**
+ * Copy and forward the hot fields of a mixed object at scan time, before the normal pass over all of its slots.
+ * Each hot field is visited with copyAndForward(), exactly as iterateAndCopyforwardSlotReference() does for every
+ * reference slot. A hot field is therefore visited twice (here and in the normal pass); the second visit finds the
+ * referent already forwarded, so the repeat is wasted work only. The scan order stays breadth-first, with the
+ * hot fields visited first, and there is no recursion.
+ * @param objectPtr the (already copied) object being scanned
+ * @return false if a copy failed (no survivor space), in which case objectPtr was pushed on the work stack
+ */
+MMINLINE bool
+MM_CopyForwardScheme::iterateAndCopyForwardHotFields(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr)
+{
+	bool success = true;
+	J9Class *clazz = J9GC_J9OBJECT_CLAZZ(objectPtr, env);
+	J9ClassHotFieldsInfo *hotFieldsInfo = clazz->hotFieldsInfo;
+	bool const compressed = env->compressObjectReferences();
+	uint8_t hotFieldOffsets[3];
+	uintptr_t numHotFields = 0;
+
+	if ((NULL != hotFieldsInfo) && (U_8_MAX != hotFieldsInfo->hotFieldOffset1)) {
+		/* hot field 2 is only valid if 1 is set, and 3 only if 2 is set */
+		hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset1;
+		if (U_8_MAX != hotFieldsInfo->hotFieldOffset2) {
+			hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset2;
+			if (U_8_MAX != hotFieldsInfo->hotFieldOffset3) {
+				hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset3;
+			}
+		}
+	} else if ((_extensions->alwaysDepthCopyFirstOffset) && (false == _extensions->objectModel.isIndexable(objectPtr))) {
+		hotFieldOffsets[numHotFields++] = DEFAULT_HOT_FIELD_OFFSET;
+	}
+
+	for (uintptr_t i = 0; success && (i < numHotFields); i++) {
+		GC_SlotObject slotObject(_javaVM->omrVM, GC_SlotObject::addToSlotAddress((fomrobject_t *)objectPtr, hotFieldOffsets[i], compressed));
+		success = copyAndForward(env, reservingContext, objectPtr, &slotObject);
+	}
+
+	return success;
+}
+
+/**
  *  Iterate the slot reference and parse and pass leaf bit of the reference to copy forward
  *  to avoid to push leaf object to work stack in case the reference need to be marked instead of copied.
  */
@@ -2851,6 +2893,11 @@ MM_CopyForwardScheme::scanMixedObjectSlots(MM_EnvironmentVLHGC *env, MM_Allocati
 	}
 
 	bool success = copyAndForwardObjectClass(env, reservingContext, objectPtr);
+
+	if (success) {
+		/* Iterating and copyforwarding  the hot fields */
+		success = iterateAndCopyForwardHotFields(env, reservingContext, objectPtr);
+	}
 
 	if (success) {
 		/* Iteratoring and copyforwarding  the slot reference with leaf bit */
