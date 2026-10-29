@@ -2119,8 +2119,8 @@ MM_CopyForwardScheme::copy(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *
 					copyLeafChildren(env, reservingContext, destinationObjectPtr);
 				}
 #endif /* J9VM_GC_LEAF_BITS */
-				/* Hot fields are no longer depth copied here. They are copy-forwarded at scan time by iterateAndCopyForwardHotFields(). */
-				/* depthCopyHotFields(env, objectModel->getPreservedClass(forwardedHeader), destinationObjectPtr, reservingContext); */
+				/* depth copy the hot fields of an object if scavenger dynamicBreadthFirstScanOrdering is enabled */
+				depthCopyHotFields(env, objectModel->getPreservedClass(forwardedHeader), destinationObjectPtr, reservingContext);
 			}
 			/* return value for updating the slot */
 			result = destinationObjectPtr;
@@ -2157,7 +2157,6 @@ MM_CopyForwardScheme::copyLeafChildren(MM_EnvironmentVLHGC *env, MM_AllocationCo
 }
 #endif /* J9VM_GC_LEAF_BITS */
 
-#if 0 /* superseded by iterateAndCopyForwardHotFields(), which handles hot fields at scan time */
 MMINLINE void
 MM_CopyForwardScheme::depthCopyHotFields(MM_EnvironmentVLHGC *env, J9Class *clazz, J9Object *destinationObjectPtr, MM_AllocationContextTarok *reservingContext) {
 	/* depth copy the hot fields of an object up to a depth specified by depthCopyMax */
@@ -2165,37 +2164,19 @@ MM_CopyForwardScheme::depthCopyHotFields(MM_EnvironmentVLHGC *env, J9Class *claz
 	if (env->_hotFieldCopyDepthCount < _extensions->depthCopyMax && NULL != hotFieldsInfo) {
 		uint8_t hotFieldOffset = hotFieldsInfo->hotFieldOffset1;
 		if (U_8_MAX != hotFieldOffset) {
-			/*
-			 * Do not hot-field-copy a field that deep scan will walk as a self-referencing chain.
-			 * hotFieldOffset is a slot index (byte offset / sizeof(reference)), while
-			 * selfReferencingField1/2 are byte offsets — convert before comparing.
-			 * Skipping here avoids the race where depthCopyHotFields installs a forwarding
-			 * pointer into the next-pointer slot before deepScanOutline can walk it, which
-			 * causes deepScanOutline to exit immediately with exitForwarded on every hop.
-			 */
-			uintptr_t const refSize = _extensions->compressObjectReferences() ? sizeof(uint32_t) : sizeof(uintptr_t);
-			uintptr_t const hfByteOffset1 = (uintptr_t)hotFieldOffset * refSize;
-			if ((hfByteOffset1 != clazz->selfReferencingField1) && (hfByteOffset1 != clazz->selfReferencingField2)) {
-				copyHotField(env, destinationObjectPtr, hotFieldOffset, reservingContext);
-			}
+			copyHotField(env, destinationObjectPtr, hotFieldOffset, reservingContext);
 			uint8_t hotFieldOffset2 = hotFieldsInfo->hotFieldOffset2;
-			if (U_8_MAX != hotFieldOffset2) {
-				uintptr_t const hfByteOffset2 = (uintptr_t)hotFieldOffset2 * refSize;
-				if ((hfByteOffset2 != clazz->selfReferencingField1) && (hfByteOffset2 != clazz->selfReferencingField2)) {
-					copyHotField(env, destinationObjectPtr, hotFieldOffset2, reservingContext);
-				}
+			if (U_8_MAX !=hotFieldOffset2) {
+				copyHotField(env, destinationObjectPtr, hotFieldOffset2, reservingContext);
 				uint8_t hotFieldOffset3 = hotFieldsInfo->hotFieldOffset3;
 				if (U_8_MAX != hotFieldOffset3) {
-					uintptr_t const hfByteOffset3 = (uintptr_t)hotFieldOffset3 * refSize;
-					if ((hfByteOffset3 != clazz->selfReferencingField1) && (hfByteOffset3 != clazz->selfReferencingField2)) {
-						copyHotField(env, destinationObjectPtr, hotFieldOffset3, reservingContext);
-					}
+					copyHotField(env, destinationObjectPtr, hotFieldOffset3, reservingContext);
 				}
 			}
 		} else if ((_extensions->alwaysDepthCopyFirstOffset) && (false == _extensions->objectModel.isIndexable(destinationObjectPtr))) {
 			copyHotField(env, destinationObjectPtr, DEFAULT_HOT_FIELD_OFFSET, reservingContext);
 		}
-	}
+	}	
 }
 
 MMINLINE void
@@ -2213,7 +2194,6 @@ MM_CopyForwardScheme::copyHotField(MM_EnvironmentVLHGC *env, J9Object *destinati
 		}
 	}
 }
-#endif /* 0 */
 
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 /**
@@ -2341,6 +2321,12 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		? UDATA_MAX
 		: (_cacheFreeList.getTotalCacheCount() * throttleNum) / OMR_MAX(throttleDivisor * throttleDen, (uintptr_t)1);
 
+	/*
+	 * Disable hot field depth copying while deep scan walks the chain: copyAndForward() on each node goes through
+	 * copy(), which would otherwise recurse into the node's hot fields. Re-enabled once the walk is done.
+	 */
+	env->disableHotFieldDepthCopy();
+
 	MM_DeepScanBudget budget;
 	budget.nodesWalked              = 0;
 	budget.maxNodes                 = _extensions->deepScanMaxNodes;
@@ -2382,6 +2368,8 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 			break;
 		}
 	}
+
+	env->enableHotFieldDepthCopy();
 
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
 	env->_copyForwardStats._totalObjsDeepScanned += budget.objDeepScanned;
@@ -2780,46 +2768,6 @@ MM_CopyForwardScheme::scanContinuationObject(MM_EnvironmentVLHGC *env, MM_Alloca
 }
 
 /**
- * Copy and forward the hot fields of a mixed object at scan time, before the normal pass over all of its slots.
- * Each hot field is visited with copyAndForward(), exactly as iterateAndCopyforwardSlotReference() does for every
- * reference slot. A hot field is therefore visited twice (here and in the normal pass); the second visit finds the
- * referent already forwarded, so the repeat is wasted work only. The scan order stays breadth-first, with the
- * hot fields visited first, and there is no recursion.
- * @param objectPtr the (already copied) object being scanned
- * @return false if a copy failed (no survivor space), in which case objectPtr was pushed on the work stack
- */
-MMINLINE bool
-MM_CopyForwardScheme::iterateAndCopyForwardHotFields(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr)
-{
-	bool success = true;
-	J9Class *clazz = J9GC_J9OBJECT_CLAZZ(objectPtr, env);
-	J9ClassHotFieldsInfo *hotFieldsInfo = clazz->hotFieldsInfo;
-	bool const compressed = env->compressObjectReferences();
-	uint8_t hotFieldOffsets[3];
-	uintptr_t numHotFields = 0;
-
-	if ((NULL != hotFieldsInfo) && (U_8_MAX != hotFieldsInfo->hotFieldOffset1)) {
-		/* hot field 2 is only valid if 1 is set, and 3 only if 2 is set */
-		hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset1;
-		if (U_8_MAX != hotFieldsInfo->hotFieldOffset2) {
-			hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset2;
-			if (U_8_MAX != hotFieldsInfo->hotFieldOffset3) {
-				hotFieldOffsets[numHotFields++] = hotFieldsInfo->hotFieldOffset3;
-			}
-		}
-	} else if ((_extensions->alwaysDepthCopyFirstOffset) && (false == _extensions->objectModel.isIndexable(objectPtr))) {
-		hotFieldOffsets[numHotFields++] = DEFAULT_HOT_FIELD_OFFSET;
-	}
-
-	for (uintptr_t i = 0; success && (i < numHotFields); i++) {
-		GC_SlotObject slotObject(_javaVM->omrVM, GC_SlotObject::addToSlotAddress((fomrobject_t *)objectPtr, hotFieldOffsets[i], compressed));
-		success = copyAndForward(env, reservingContext, objectPtr, &slotObject);
-	}
-
-	return success;
-}
-
-/**
  *  Iterate the slot reference and parse and pass leaf bit of the reference to copy forward
  *  to avoid to push leaf object to work stack in case the reference need to be marked instead of copied.
  */
@@ -2893,11 +2841,6 @@ MM_CopyForwardScheme::scanMixedObjectSlots(MM_EnvironmentVLHGC *env, MM_Allocati
 	}
 
 	bool success = copyAndForwardObjectClass(env, reservingContext, objectPtr);
-
-	if (success) {
-		/* Iterating and copyforwarding  the hot fields */
-		success = iterateAndCopyForwardHotFields(env, reservingContext, objectPtr);
-	}
 
 	if (success) {
 		/* Iteratoring and copyforwarding  the slot reference with leaf bit */
