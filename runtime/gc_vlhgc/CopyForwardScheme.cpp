@@ -1278,6 +1278,9 @@ MM_CopyForwardScheme::copyAndForward(MM_EnvironmentVLHGC *env, MM_AllocationCont
 	J9Object *objectPtr = originalObjectPtr;
 	bool success = true;
 
+	/* cleared here, set by copy() only if this call actually copied the object */
+	env->_effectiveCopyScanCache = NULL;
+
 	if (isObjectInEvacuateMemory(objectPtr)) {
 		/* Object needs to be copy and forwarded.  Check if the work has already been done */
 		MM_ForwardedHeader forwardHeader(objectPtr, _extensions->compressObjectReferences());
@@ -2086,6 +2089,9 @@ MM_CopyForwardScheme::copy(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *
 #endif /* J9VM_GC_LEAF_BITS */
 				/* depth copy the hot fields of an object if scavenger dynamicBreadthFirstScanOrdering is enabled */
 				depthCopyHotFields(env, objectModel->getPreservedClass(forwardedHeader), destinationObjectPtr, reservingContext);
+
+				/* Set last, since copyLeafChildren() and depthCopyHotFields() above copy other objects and would overwrite it */
+				env->_effectiveCopyScanCache = copyCache;
 			}
 			/* return value for updating the slot */
 			result = destinationObjectPtr;
@@ -2209,25 +2215,9 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 
 	J9Object *currentDeepObj = objectPtr;
 	uintptr_t priorityField = priorityFieldOffset1;
-	bool const compressed = _extensions->compressObjectReferences();
 
 	do {
 		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + priorityField));
-		J9Object *targetObj = prioritySlot.readReferenceFromSlot();
-
-		bool canContinue = false;
-		if ((NULL != targetObj) && ((uintptr_t)targetObj >= (uintptr_t)_heapBase) && ((uintptr_t)targetObj < (uintptr_t)_heapTop) && isObjectInEvacuateMemory(targetObj)) {
-			MM_ForwardedHeader forwardHeader(targetObj, compressed);
-			canContinue = !forwardHeader.isForwardedPointer();
-		}
-		if (!canContinue) {
-			/* Can't continue any further - attempt to deep scan with the other self referencing field (e.g. prev field) */
-			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
-				break;
-			}
-			priorityField = priorityFieldOffset2;
-			continue;
-		}
 
 		bool success = copyAndForward(env, reservingContext, currentDeepObj, &prioritySlot);
 		if (!success) {
@@ -2237,6 +2227,16 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 		}
 		if (_abortInProgress) {
 			break;
+		}
+
+		/* Did we encounter a NULL, not evacuated or already forwarded object? */
+		if (NULL == env->_effectiveCopyScanCache) {
+			/* Can't continue any further - attempt to deep scan with the other self referencing field (e.g. prev field) */
+			if ((priorityField == priorityFieldOffset2) || (0 == priorityFieldOffset2)) {
+				break;
+			}
+			priorityField = priorityFieldOffset2;
+			continue;
 		}
 
 		/* Throttle: stop if this thread has released more than its fair share of
