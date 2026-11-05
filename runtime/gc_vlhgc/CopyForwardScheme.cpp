@@ -2170,31 +2170,6 @@ void
 MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationContextTarok *reservingContext, J9Object *objectPtr, uintptr_t priorityFieldOffset1, uintptr_t priorityFieldOffset2)
 {
 	/*
-	 * Early exit: if a previous deepScanOutline call this GC cycle already found that
-	 * copyAndForward() fails immediately (no survivor space), suppress all further
-	 * deep scan attempts this cycle.
-	 */
-	if (env->_copyForwardStats._deepScanSuppressed) {
-		return;
-	}
-
-	/*
-	 * Early exit: if this region is marked _noEvacuation (e.g. _shouldRunCopyForward
-	 * is false because there are insufficient free regions), the normal slot scanner
-	 * will trace - not copy - all objects in this region.  Deep scan must match that
-	 * behaviour: calling copyAndForward() on a _noEvacuation region succeeds
-	 * (because isObjectInEvacuateMemory uses _regionShouldMark, not _noEvacuation)
-	 * but is wasted work, since the copied objects will be compacted immediately afterward.
-	 */
-	if (isObjectInEvacuateMemory(objectPtr)) {
-		MM_HeapRegionDescriptorVLHGC *region =
-			(MM_HeapRegionDescriptorVLHGC *)_regionManager->tableDescriptorForAddress(objectPtr);
-		if (NULL != region && region->_markData._noEvacuation) {
-			return;
-		}
-	}
-
-	/*
 	 * Throttle: the walk stops once this thread has released more scan caches to the
 	 * shared list than its fair share.  The budget is normalised by region size so it
 	 * is anchored to a 1 MB region baseline regardless of heap or region size.
@@ -2217,17 +2192,14 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 	uintptr_t priorityField = priorityFieldOffset1;
 
 	do {
+		/* A failed copy (no survivor space) raises the abort flag, in which case stop walking. */
+		if (abortFlagRaised()) {
+			break;
+		}
+
 		GC_SlotObject prioritySlot(_javaVM->omrVM, (fomrobject_t*)(((uintptr_t)currentDeepObj) + priorityField));
 
-		bool success = copyAndForward(env, reservingContext, currentDeepObj, &prioritySlot);
-		if (!success) {
-			/* No survivor space - suppress deep scan for the rest of this GC cycle. */
-			env->_copyForwardStats._deepScanSuppressed = true;
-			break;
-		}
-		if (_abortInProgress) {
-			break;
-		}
+		copyAndForward(env, reservingContext, currentDeepObj, &prioritySlot);
 
 		/* Did we encounter a NULL, not evacuated or already forwarded object? */
 		if (NULL == env->_effectiveCopyScanCache) {
@@ -2236,16 +2208,15 @@ MM_CopyForwardScheme::deepScanOutline(MM_EnvironmentVLHGC *env, MM_AllocationCon
 				break;
 			}
 			priorityField = priorityFieldOffset2;
-			continue;
-		}
+		} else {
+			/* Throttle: stop if this thread has released more than its fair share of
+			 * scan caches to the shared list since this call began. */
+			if ((env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart) > scanCacheThrottle) {
+				break;
+			}
 
-		/* Throttle: stop if this thread has released more than its fair share of
-		 * scan caches to the shared list since this call began. */
-		if ((env->_copyForwardStats._releaseScanListCount - releaseScanListCountAtStart) > scanCacheThrottle) {
-			break;
+			currentDeepObj = prioritySlot.readReferenceFromSlot();
 		}
-
-		currentDeepObj = prioritySlot.readReferenceFromSlot();
 	} while (NULL != currentDeepObj);
 
 	env->enableHotFieldDepthCopy();
